@@ -1,6 +1,6 @@
 # KestinBot
 
-KestinBot is an AI-powered study assistant grounded in the Marcy Lab School curriculum. Students ask questions and get answers based on Marcy's own docs rather than Reddit or other generic internet knowledge. Most AI tools stop at the answer. KestinBot doesn't. Every answer is followed by a check for understanding where the student rephrases the concept in their own words. What they write back determines the bot's next move: to extend, build on, or back up to more fundamental skills.
+KestinBot is an AI-powered study assistant grounded in the Marcy Lab School curriculum. Students ask questions and get answers based on Marcy's own docs rather than Reddit or other generic internet knowledge. Most AI tools stop at the answer. KestinBot doesn't. Every answer is followed by a check for understanding where the student rephrases the concept in their own words. What they write back determines the bot's next move: **extend**, **build**, or **backup** (step back to more fundamental skills).
 
 The name is deliberate. Kestin, Miller et al. (2025) ran a randomized controlled trial at Harvard showing that a purpose-built AI tutor outperformed active learning classrooms, not because it was an LLM, but because it was curriculum-specific, adaptive, and tested for transfer. That is the design this app attempts to replicate.
 
@@ -25,7 +25,7 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 3. The top 5 most relevant chunks are passed to the OpenAI API with a carefully engineered system prompt
 4. The model streams back a plain-language explanation grounded in those chunks
 5. The bot follows up with a check, asking the student to explain it back
-6. The student's reply is classified: **extend**, **build**, or **back up**
+6. The student's reply is classified: **extend**, **build**, or **backup**
 7. The next response branches accordingly, with resource chips that unlock based on the branch
 
 ---
@@ -140,7 +140,7 @@ POST /api/chat
 Each assistant message has a `kind` and `text`. A shared `turn_id` groups messages that belong to the same instructional beat.
 
 ```ts
-type Branch = "extend" | "build" | "back_up";
+type Branch = "extend" | "build" | "backup";
 
 type ResourceState = "disable" | "show" | "emphasize";
 
@@ -216,7 +216,7 @@ Output: streamed tokens → forwarded to client as SSE (text/event-stream)
 
 ```
 Input:  student's check reply + conversation context
-Output: one of [ "extend" | "build" | "back_up" ]
+Output: one of [ "extend" | "build" | "backup" ]
 ```
 
 **Contract: API → DB (write)**
@@ -302,9 +302,9 @@ After a student responds to the check, the app classifies the reply and branches
 
 | Branch | When | What happens |
 |--------|------|--------------|
-| **Extend** | Solid rephrasing | Harder material or a practice prompt |
-| **Build** | Partial understanding | Same concept, different angle: analogy, example, diagram |
-| **Back up** | Missing the foundation | Simpler chunks, prerequisites from the docs |
+| **extend** | Solid rephrasing | Harder material or a practice prompt |
+| **build** | Partial understanding | Same concept, different angle: analogy, example, diagram |
+| **backup** | Missing the foundation | Simpler chunks, prerequisites from the docs |
 
 The classifier reads what the student actually wrote, not a button they clicked. Students don't always know what they don't know, and self-report is unreliable. If a student's tone is confident but their rephrasing is off, the classifier follows the rephrasing.
 
@@ -400,7 +400,7 @@ Visit `http://localhost:5173`
 **v2 — Logging and aggregation**
 - Persist classification results, which chunks fired, and which branch was taken on every interaction
 - The data is already partially there in the messages table; this version makes it queryable
-- Over time, patterns emerge from usage: which questions consistently route to back up, which chunks fire together, where the curriculum has gaps
+- Over time, patterns emerge from usage: which questions consistently route to **backup**, which chunks fire together, where the curriculum has gaps
 - This is the foundation everything else in the roadmap depends on. The instructor dashboard is an empty table without it
 
 **v3 — Generated coding challenges**
@@ -410,7 +410,7 @@ Visit `http://localhost:5173`
 
 **v4 — Prerequisite mapping**
 - Encode the dependency graph of the Marcy curriculum (one-time authoring work)
-- When a student routes to back up, surface the prerequisite concept with a direct link to that section of the Marcy Docs
+- When a student routes to **backup**, surface the prerequisite concept with a direct link to that section of the Marcy Docs
 - Example: struggling with `useEffect`, surface `useState` first
 
 **v5 — Video**
@@ -433,11 +433,11 @@ Visit `http://localhost:5173`
 
 **v8 — Instructor dashboard**
 - Aggregate classification signals across the cohort
-- Surface which concepts are producing the most back up branches as a real-time formative signal
+- Surface which concepts are producing the most **backup** branches as a real-time formative signal
 - Only useful once v2 logging is in place and there are enough students to see patterns
 
 **v9 — Ping an instructor**
-- When the conversation reveals sustained struggle across multiple back up branches, present a path that lets the student flag a human instructor directly
+- When the conversation reveals sustained struggle across multiple **backup** branches, present a path that lets the student flag a human instructor directly
 - Passive signal first visible to instructor dashboard in v8; active ping as opt-in
 
 ---

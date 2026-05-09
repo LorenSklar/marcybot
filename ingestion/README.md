@@ -1,4 +1,4 @@
-# Ingestion
+# KestinBot - Ingestion
 
 One-time (or perhaps occasional) Python job that reads the Marcy curriculum markdown, chunks it, embeds it, and writes vectors into Supabase Postgres. Runs locally. Not part of the Express server.
 

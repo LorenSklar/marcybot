@@ -1,121 +1,158 @@
 import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
 import './App.css'
 
+/** One line in the transcript (user or assistant). IDs keep React lists stable when we reorder later. */
+type Message = {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+}
+
+/** Works on http://LAN IPs (phone on Wi‑Fi); crypto.randomUUID needs https or localhost. */
+function newMessageId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID()
+    }
+  } catch {
+    /* non-secure context */
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+}
+
+type AssistantKind = 'explain' | 'check' | 'probe' | 'prompt'
+
+function toApiMessages(history: Message[]) {
+  return history.map((m) => ({ role: m.role, content: m.text }))
+}
+
+const ASSISTANT_KINDS: AssistantKind[] = ['explain', 'check', 'probe', 'prompt']
+
+function isAssistantKind(v: unknown): v is AssistantKind {
+  return typeof v === 'string' && (ASSISTANT_KINDS as string[]).includes(v)
+}
+
+/**
+ * App shell + local message list + POST /api/chat (Vite proxies to Express on :3000).
+ */
 function App() {
-  const [count, setCount] = useState(0)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  /** Prior assistant `move` from last successful /api/chat response; sent as previousAssistantMove on the next request. */
+  const [lastAssistantMove, setLastAssistantMove] = useState<AssistantKind | null>(
+    null,
+  )
+
+  async function sendMessage() {
+    const text = draft.trim()
+    if (!text || sending) return
+
+    const userMsg: Message = {
+      id: newMessageId(),
+      role: 'user',
+      text,
+    }
+    const historyForApi = [...messages, userMsg]
+    setMessages(historyForApi)
+    setDraft('')
+    setSending(true)
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: toApiMessages(historyForApi),
+          ...(lastAssistantMove != null
+            ? { previousAssistantMove: lastAssistantMove }
+            : {}),
+        }),
+      })
+      const data: { message?: string; move?: string; error?: string } =
+        await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || res.statusText)
+      }
+      const reply = data.message?.trim() || '(empty reply)'
+      if (isAssistantKind(data.move)) {
+        setLastAssistantMove(data.move)
+      }
+      setMessages((prev) => [
+        ...prev,
+        { id: newMessageId(), role: 'assistant', text: reply },
+      ])
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Request failed'
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newMessageId(),
+          role: 'assistant',
+          text: `Something went wrong: ${msg}. Is the API running? (npm run dev:api from repo root)`,
+        },
+      ])
+    } finally {
+      setSending(false)
+    }
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">Marcybot</h1>
+      </header>
+
+      <main className="app-main" id="conversation" aria-label="Conversation">
+        {messages.length === 0 ? (
+          <p className="app-placeholder">
+            Send a message below. Replies use OpenAI via{' '}
+            <code className="app-inline-code">POST /api/chat</code> (run{' '}
+            <code className="app-inline-code">npm run dev:api</code> in another
+            terminal).
           </p>
-        </div>
+        ) : (
+          <ul className="app-messages" aria-live="polite">
+            {messages.map((m) => (
+              <li
+                key={m.id}
+                className={
+                  m.role === 'user' ? 'app-msg app-msg--user' : 'app-msg app-msg--assistant'
+                }
+              >
+                <span className="visually-hidden">{m.role}: </span>
+                {m.text}
+              </li>
+            ))}
+          </ul>
+        )}
+      </main>
+
+      <footer className="app-composer" aria-label="Message composer">
+        <label htmlFor="message-input" className="visually-hidden">
+          Message
+        </label>
+        <textarea
+          id="message-input"
+          className="app-input"
+          name="message"
+          placeholder="Ask about the Marcy curriculum…"
+          rows={2}
+          autoComplete="off"
+          value={draft}
+          disabled={sending}
+          onChange={(e) => setDraft(e.target.value)}
+        />
         <button
           type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
+          className="app-send"
+          disabled={sending}
+          onClick={sendMessage}
         >
-          Count is {count}
+          {sending ? '…' : 'Send'}
         </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      </footer>
+    </div>
   )
 }
 

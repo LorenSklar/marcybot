@@ -2,10 +2,12 @@
   "name": "kestinbot",
   "private": true,
   "workspaces": [
-    "client"
+    "client",
+    "server"
   ],
   "scripts": {
     "dev": "npm run dev -w client",
+    "dev:api": "npm run dev -w server",
     "build": "npm run build -w client",
     "lint": "npm run lint -w client"
   }

@@ -5,7 +5,7 @@ Goal: vertical slice today → user testing → revise.
 ## Structure
 
 - [x] `client/` — React (Vite), `/api` proxy → `localhost:3000`
-- [ ] `server/` — Express on port 3000
+- [x] `server/` — Express on port 3000 (`POST /api/chat`, metaprompt JSON; no RAG/SSE yet)
 - [x] `ingestion/` — Python (existing)
 
 ## Slice 1 — End-to-end RAG + stream
@@ -19,7 +19,7 @@ Goal: vertical slice today → user testing → revise.
 
 ### Server
 
-- [ ] Scaffold `server/` workspace; add to root `package.json` workspaces + scripts
+- [x] Scaffold `server/` workspace; root `package.json` workspaces + `dev:api`
 - [ ] `GET /api/health`
 - [ ] `POST /api/chat` — embed query → top-k retrieval → OpenAI chat completion **streamed** as SSE
 - [ ] Env: `SUPABASE_URL`, `SUPABASE_KEY`, `OPENAI_API_KEY` (ingest); add `DATABASE_URL` when Express talks to Postgres directly
@@ -32,7 +32,7 @@ Goal: vertical slice today → user testing → revise.
 ## Slice 2 — Pedagogy (after stream works)
 
 - [ ] Assistant turn sequence: explain → check (“your turn”) → classify student reply
-- [ ] Classifier: `extend` | `build` | `back_up` (OpenAI or structured output)
+- [ ] Classifier: `extend` | `build` | `backup` (OpenAI or structured output)
 - [ ] Payload shape: `turn_id`, `kind`, optional `meta` / resource hints per README
 - [ ] UI: bubble labels (Big idea, Your turn, etc.) + resource chips
 

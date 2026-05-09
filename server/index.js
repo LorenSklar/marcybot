@@ -55,6 +55,12 @@ function systemContentForRequest(previousAssistantMove) {
 const app = express()
 app.use(express.json({ limit: '256kb' }))
 
+/** Production: serve Vite build from same origin so `fetch('/api/...')` works without a proxy. */
+const clientDist = path.join(__dirname, '..', 'client', 'dist')
+const serveClient =
+  process.env.NODE_ENV === 'production' &&
+  fs.existsSync(path.join(clientDist, 'index.html'))
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 function parseChatJson(raw) {
@@ -142,8 +148,22 @@ app.post('/api/chat', async (req, res) => {
   }
 })
 
+if (serveClient) {
+  app.use(express.static(clientDist))
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) {
+      next()
+      return
+    }
+    res.sendFile(path.join(clientDist, 'index.html'))
+  })
+}
+
 const PORT = parseInt(process.env.PORT || '3000', 10)
 app.listen(PORT, () => {
   console.log(`Marcybot API http://localhost:${PORT} (POST /api/chat)`)
+  if (serveClient) {
+    console.log(`Serving client from ${clientDist}`)
+  }
   console.log(`CHAT_MAX_MESSAGES=${CHAT_MAX_MESSAGES} model=${MODEL}`)
 })

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Marcy curriculum ingestion: markdown under DOCS_PATH → chunks → OpenAI embeddings → Postgres `curriculum`.
+Marcy curriculum ingestion
 
 Env (repo-root .env): DATABASE_URL, OPENAI_API_KEY, DOCS_PATH optional (see .env.example).
 """

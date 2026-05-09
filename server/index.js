@@ -1,6 +1,6 @@
 /**
  * Chat API for Marcybot. Loads repo-root .env + metaprompt from ./metaprompt.md.
- * POST /api/chat — Socratic JSON reply (answer + move + rationale).
+ * POST /api/chat — JSON reply (answer + move + rationale); optional RAG when DATABASE_URL set.
  * Optional body.previousAssistantMove: prior turn's move from last response.
  */
 import fs from 'node:fs'
@@ -11,6 +11,14 @@ import dotenv from 'dotenv'
 import express from 'express'
 import OpenAI from 'openai'
 
+import {
+  buildRetrievalText,
+  embedQuery,
+  formatChunksForPrompt,
+  rowsToSources,
+  searchSimilarChunks,
+} from './rag.js'
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.join(__dirname, '..', '.env') })
 
@@ -19,6 +27,10 @@ const CHAT_MAX_MESSAGES =
   Number.isFinite(rawCap) && rawCap > 0 ? Math.min(rawCap, 100) : 16
 
 const MODEL = process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini'
+const RAG_TOP_K = Math.min(
+  Math.max(parseInt(process.env.RAG_TOP_K ?? '5', 10) || 5, 1),
+  20,
+)
 
 /** Same union as client `AssistantKind`; JSON field remains `move`. */
 const ASSISTANT_KINDS = new Set(['explain', 'check', 'probe', 'prompt'])
@@ -41,13 +53,16 @@ function metapromptForApi() {
   return lines.slice(start).join('\n').trim()
 }
 
-function systemContentForRequest(previousAssistantMove) {
+function systemContentForRequest(previousAssistantMove, retrievedExcerptBlock) {
   let content = metapromptForApi()
   if (
     typeof previousAssistantMove === 'string' &&
     ASSISTANT_KINDS.has(previousAssistantMove)
   ) {
     content += `\n\n## Turn context (from client)\nThe assistant’s previous reply used **move**: \`${previousAssistantMove}\`.`
+  }
+  if (retrievedExcerptBlock) {
+    content += `\n\n## Retrieved curriculum excerpts\n\n${retrievedExcerptBlock}`
   }
   return content
 }
@@ -119,9 +134,28 @@ app.post('/api/chat', async (req, res) => {
 
     const recent = normalized.slice(-CHAT_MAX_MESSAGES)
 
+    let retrievedContext = ''
+    let sources = []
+    const retrievalText = buildRetrievalText(recent, previousAssistantMove)
+    if (process.env.DATABASE_URL && retrievalText) {
+      try {
+        const embedding = await embedQuery(openai, retrievalText)
+        if (embedding) {
+          const rows = await searchSimilarChunks(embedding, RAG_TOP_K)
+          retrievedContext = formatChunksForPrompt(rows)
+          sources = rowsToSources(rows)
+        }
+      } catch (ragErr) {
+        console.error('RAG retrieval failed:', ragErr)
+      }
+    }
+
     const system = {
       role: 'system',
-      content: systemContentForRequest(previousAssistantMove),
+      content: systemContentForRequest(
+        previousAssistantMove,
+        retrievedContext || '',
+      ),
     }
 
     const completion = await openai.chat.completions.create({
@@ -138,8 +172,8 @@ app.post('/api/chat', async (req, res) => {
       answer: parsed.answer,
       move: parsed.move,
       rationale: parsed.rationale,
-      sources: [],
-      retrieved_context: '',
+      sources,
+      retrieved_context: retrievedContext,
     })
   } catch (err) {
     console.error(err)
@@ -165,5 +199,7 @@ app.listen(PORT, () => {
   if (serveClient) {
     console.log(`Serving client from ${clientDist}`)
   }
-  console.log(`CHAT_MAX_MESSAGES=${CHAT_MAX_MESSAGES} model=${MODEL}`)
+  console.log(
+    `CHAT_MAX_MESSAGES=${CHAT_MAX_MESSAGES} model=${MODEL} RAG_TOP_K=${RAG_TOP_K} RAG=${process.env.DATABASE_URL ? 'on' : 'off'}`,
+  )
 })

@@ -69,8 +69,21 @@ function App() {
             : {}),
         }),
       })
-      const data: { message?: string; move?: string; error?: string } =
-        await res.json()
+      const raw = await res.text()
+      let data: { message?: string; move?: string; error?: string } = {}
+      if (raw.trim()) {
+        try {
+          data = JSON.parse(raw) as typeof data
+        } catch {
+          throw new Error(
+            res.ok
+              ? `Invalid JSON from API (empty or non-JSON body). First chars: ${raw.slice(0, 120)}`
+              : `${res.status} ${res.statusText}: ${raw.slice(0, 200)}`,
+          )
+        }
+      } else if (!res.ok) {
+        throw new Error(`${res.status} ${res.statusText} (empty body)`)
+      }
       if (!res.ok) {
         throw new Error(data.error || res.statusText)
       }

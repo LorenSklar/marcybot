@@ -1,6 +1,6 @@
 # Ingestion
 
-One-time (or perhaps occassional) Python job that reads the Marcy curriculum markdown, chunks it, embeds it, and writes vectors into Supabase. Runs locally. Not part of the Express server.
+One-time (or perhaps occasional) Python job that reads the Marcy curriculum markdown, chunks it, embeds it, and writes vectors into Supabase Postgres. Runs locally. Not part of the Express server.
 
 ---
 
@@ -8,20 +8,18 @@ One-time (or perhaps occassional) Python job that reads the Marcy curriculum mar
 
 ```bash
 cd ingestion
-cp example.env .env        # add your keys
-python ping.py             # confirm Supabase connection
-python verify.py           # confirm pgvector is working
-python ingest.py           # embed and load the curriculum
+cp ../.env.example ../.env   # repo-root .env + add your keys
+python ingest.py
 ```
+
+Optional: `python verify.py` — confirms `public.curriculum` exists, prints columns, row count, and one sample row if any.
 
 ---
 
 ## Prerequisites
 
 - Python 3.10+
-- Supabase project with pgvector enabled and `chunks` table created (see `db/schema.sql`)
-- OpenAI API key
-- Supabase connection pooler URI
+- Repo-root `.env` with `DATABASE_URL` (Postgres pool URI from Supabase → Connect), `OPENAI_API_KEY`, and `DOCS_PATH` if the curriculum clone is not in the default location (see `.env.example`).
 
 ---
 
@@ -36,50 +34,35 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Clone the curriculum docs
+### 2. Curriculum docs
 
-The source material is not in this repo. Clone it as a sibling directory:
+If `marcy-curriculum-docs` is not already under the marcybot repo, clone it (sibling example):
 
 ```bash
 cd ..
 git clone https://github.com/The-Marcy-Lab-School/marcy-curriculum-docs.git
 ```
 
+Set `DOCS_PATH` in `.env` if the clone lives somewhere else (paths are relative to the marcybot repo root unless absolute).
+
 ### 3. Configure environment
 
-```bash
-cp example.env .env
-```
-
-```env
-DATABASE_URL=postgresql://...pooler.supabase.com:6543/postgres?sslmode=require
-OPENAI_API_KEY=sk-...
-DOCS_PATH=../marcy-curriculum-docs
-```
-
-Use the Supabase **connection pooler** URI, not the direct DB URL.
-
-### 4. Confirm your setup
+From the **marcybot repo root**:
 
 ```bash
-python ping.py
+cp .env.example .env
 ```
 
-Checks that your `.env` is loaded and Supabase is reachable.
+Fill in `DATABASE_URL`, `OPENAI_API_KEY`, and `DOCS_PATH` as needed.
+
+### 4. Run ingestion
 
 ```bash
-python verify.py
-```
-
-Embeds "hello world" and queries pgvector. If you get a vector back, everything is wired correctly and you're ready to ingest.
-
-### 5. Run ingestion
-
-```bash
+cd ingestion
 python ingest.py
 ```
 
-Walks `DOCS_PATH`, chunks by `##` headers, embeds with `text-embedding-3-small`, and upserts into the `chunks` table in Supabase.
+Walks `DOCS_PATH`, chunks by `##` headers (via LangChain), embeds with `text-embedding-3-small`, and loads rows into the **`curriculum`** table.
 
 ---
 
@@ -99,12 +82,22 @@ Walks `DOCS_PATH`, chunks by `##` headers, embeds with `text-embedding-3-small`,
 
 ## Cost note
 
-Embedding the full Marcy curriculum with `text-embedding-3-small` runs approximately $2-5 one-time at current OpenAI pricing. Verify before quoting in interviews.
+Embedding the full Marcy curriculum with `text-embedding-3-small` runs well under one dollar at typical OpenAI pricing. Confirm current rates before using script.
 
 ---
 
 ## Troubleshooting
+- **`FATAL: password authentication failed for user "postgres"`**  
+  The **database password** inside `DATABASE_URL` is wrong or stale. Supabase → **Database** → **Settings** → reset database password, then put the **new** password into the URI (and URL-encode special characters if needed). Copy the URI mode (transaction pooler vs direct) from **Connect** so user/host/port match.
 
-- **Connection errors:** confirm you are using the pooler URI and that `sslmode=require` is set
-- **pgvector errors:** enable the extension in Supabase before running ingestion
-- **Empty DOCS_PATH:** the curriculum repo must be cloned separately; this repo does not bundle those files
+- **`connection refused` / timeouts**  
+  Wrong host or port in `DATABASE_URL`, VPN/firewall, or project paused. Re-copy the connection string from **Connect**.
+
+- **`relation "curriculum" does not exist`**  
+  Run `python ingest.py` once (it creates the table if missing) or run `db/schema.sql` in the SQL Editor.
+
+- **`vector` / dimension errors**  
+  Enable the **pgvector** extension (included in `db/schema.sql`). Table column must stay **`vector(1536)`** for `text-embedding-3-small`.
+
+- **No markdown files**  
+  Clone the curriculum repo or fix **`DOCS_PATH`**; the script resolves `./marcy-curriculum-docs` and `../marcy-curriculum-docs` when `DOCS_PATH` is unset.

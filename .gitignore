@@ -46,5 +46,8 @@ coverage/
 # Vite
 *.local
 
+# Local clone of https://github.com/The-Marcy-Lab-School/marcy-curriculum-docs (ingestion DOCS_PATH)
+marcy-curriculum-docs/
+
 # Personal working notes
 FEEDBACK.md

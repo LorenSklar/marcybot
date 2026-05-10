@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { BookOpen, Code2, PlayCircle, Users } from 'lucide-react'
 import { AssistantMessageBody } from './AssistantMessageBody'
 import './App.css'
 
@@ -33,10 +34,22 @@ function isAssistantKind(v: unknown): v is AssistantKind {
   return typeof v === 'string' && (ASSISTANT_KINDS as string[]).includes(v)
 }
 
+const MARCY_DOCS_HOME =
+  import.meta.env.VITE_MARCY_DOCS_HOME_URL ||
+  'https://marcylabschool.gitbook.io/marcy-lab-school-docs#course-modules'
+
+const PRACTICE_URL =
+  import.meta.env.VITE_PRACTICE_URL || 'https://jsbin.com/?js'
+
+function openExternalTab(href: string) {
+  window.open(href, '_blank', 'noopener,noreferrer')
+}
+
 /**
  * App shell + local message list + POST /api/chat (Vite proxies to Express on :3000).
  */
 function App() {
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
@@ -142,29 +155,72 @@ function App() {
         )}
       </main>
 
-      <footer className="app-composer" aria-label="Message composer">
-        <label htmlFor="message-input" className="visually-hidden">
-          Message
-        </label>
-        <textarea
-          id="message-input"
-          className="app-input"
-          name="message"
-          placeholder="Ask about the Marcy curriculum…"
-          rows={2}
-          autoComplete="off"
-          value={draft}
-          disabled={sending}
-          onChange={(e) => setDraft(e.target.value)}
-        />
-        <button
-          type="button"
-          className="app-send"
-          disabled={sending}
-          onClick={sendMessage}
-        >
-          {sending ? '…' : 'Send'}
-        </button>
+      <footer className="app-dock" aria-label="Composer and shortcuts">
+        <div className="app-composer" aria-label="Message composer">
+          <label htmlFor="message-input" className="visually-hidden">
+            Message
+          </label>
+          <textarea
+            ref={inputRef}
+            id="message-input"
+            className="app-input"
+            name="message"
+            placeholder="Ask about the Marcy curriculum…"
+            rows={2}
+            autoComplete="off"
+            value={draft}
+            disabled={sending}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <button
+            type="button"
+            className="app-send"
+            disabled={sending}
+            onClick={sendMessage}
+          >
+            {sending ? '…' : 'Send'}
+          </button>
+        </div>
+        <div className="app-chip-toolbar" role="toolbar" aria-label="Learning shortcuts">
+          <button
+            type="button"
+            className="app-chip app-chip--disabled"
+            disabled
+            title="Peer help not wired yet"
+          >
+            <Users className="app-chip-icon" aria-hidden />
+            <span className="app-chip-label">Peer</span>
+          </button>
+          <button
+            type="button"
+            className="app-chip"
+            disabled={sending}
+            title="Open Marcy curriculum docs"
+            onClick={() => openExternalTab(MARCY_DOCS_HOME)}
+          >
+            <BookOpen className="app-chip-icon" aria-hidden />
+            <span className="app-chip-label">Read</span>
+          </button>
+          <button
+            type="button"
+            className="app-chip app-chip--disabled"
+            disabled
+            title="Curated Marcy videos not wired yet"
+          >
+            <PlayCircle className="app-chip-icon" aria-hidden />
+            <span className="app-chip-label">Watch</span>
+          </button>
+          <button
+            type="button"
+            className="app-chip app-chip--primary"
+            disabled={sending}
+            title="Open JS Bin (JavaScript pane) to practice"
+            onClick={() => openExternalTab(PRACTICE_URL)}
+          >
+            <Code2 className="app-chip-icon" aria-hidden />
+            <span className="app-chip-label">Practice</span>
+          </button>
+        </div>
       </footer>
     </div>
   )

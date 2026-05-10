@@ -211,15 +211,94 @@
   white-space: break-spaces;
 }
 
+/* Fixed-feel bottom dock: shortcuts + composer (flex parent keeps it at viewport bottom) */
+.app-dock {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  .app-dock {
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.35);
+  }
+}
+
+.app-chip-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.35rem;
+  padding: 0.35rem 1rem max(0.65rem, env(safe-area-inset-bottom));
+  overflow-x: visible;
+}
+
+.app-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.4rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-h);
+  background: var(--social-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.app-chip:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.app-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.app-chip:disabled {
+  cursor: not-allowed;
+}
+
+.app-chip--disabled,
+.app-chip--disabled:hover {
+  opacity: 0.45;
+  border-color: var(--border);
+  background: var(--social-bg);
+}
+
+/* Right-hand default: practice sits on the right edge of the bar */
+.app-chip--primary {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  font-weight: 600;
+}
+
+.app-chip--primary:hover:not(:disabled) {
+  filter: brightness(1.03);
+}
+
+.app-chip-icon {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.app-chip-label {
+  line-height: 1.2;
+}
+
 .app-composer {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border);
-  background: var(--bg);
+  padding: 0.75rem 1rem 0.5rem;
 }
 
 @media (min-width: 768px) {

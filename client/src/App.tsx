@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AssistantMessageBody } from './AssistantMessageBody'
 import './App.css'
 
 /** One line in the transcript (user or assistant). IDs keep React lists stable when we reorder later. */
@@ -115,6 +116,10 @@ function App() {
               or you didn’t want to draw attention by raising your hand.
               Ask here with no judgement. Learn at your own pace. Available anytime.
             </p>
+            <p className="app-onboarding-cta">
+              What are you curious about?
+              Ask me a question and level up.
+            </p>
           </div>
         ) : (
           <ul className="app-messages" aria-live="polite">
@@ -126,7 +131,11 @@ function App() {
                 }
               >
                 <span className="visually-hidden">{m.role}: </span>
-                {m.text}
+                {m.role === 'assistant' ? (
+                  <AssistantMessageBody text={m.text} />
+                ) : (
+                  m.text
+                )}
               </li>
             ))}
           </ul>
@@ -141,7 +150,7 @@ function App() {
           id="message-input"
           className="app-input"
           name="message"
-          placeholder="Ask me a question and level up"
+          placeholder="Ask about the Marcy curriculum…"
           rows={2}
           autoComplete="off"
           value={draft}

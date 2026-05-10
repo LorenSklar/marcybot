@@ -156,12 +156,28 @@ function slugifyHeadingForFragment(heading) {
     .replace(/^-|-$/g, '')
 }
 
+/** Student-facing docs; Read chip + `sources[].url` default here. */
+const DEFAULT_CURRICULUM_SOURCE_BASE_URL =
+  'https://marcylabschool.gitbook.io/marcy-lab-school-docs/'
+
+const MARCY_CURRICULUM_GITHUB_BLOB_RE =
+  /github\.com\/The-Marcy-Lab-School\/marcy-curriculum-docs\/blob/i
+
+/** Fellows should never open raw GitHub blob from RAG links; old .env often set that URL by mistake. */
+function curriculumBaseUrlForPublishedLinks() {
+  const raw =
+    process.env.CURRICULUM_SOURCE_BASE_URL?.trim() ||
+    DEFAULT_CURRICULUM_SOURCE_BASE_URL
+  if (MARCY_CURRICULUM_GITHUB_BLOB_RE.test(raw)) {
+    return DEFAULT_CURRICULUM_SOURCE_BASE_URL
+  }
+  return raw
+}
+
 function curriculumSourceUrl(sourcePath, sectionHeading = '') {
   if (!sourcePath) return ''
   if (/^https?:\/\//i.test(sourcePath)) return sourcePath
-  const base =
-    process.env.CURRICULUM_SOURCE_BASE_URL ||
-    'https://github.com/The-Marcy-Lab-School/marcy-curriculum-docs/blob/main/'
+  const base = curriculumBaseUrlForPublishedLinks()
   const normalized = base.replace(/\/?$/, '/')
   let rel = String(sourcePath).replace(/^\//, '')
   const isGitBook = /gitbook\.io/i.test(base)

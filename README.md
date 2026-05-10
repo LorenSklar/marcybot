@@ -6,7 +6,7 @@ KestinBot is an AI-powered study assistant grounded in the Marcy Lab School curr
 
 The name is deliberate. Kestin, Miller et al. (2025) ran a randomized controlled trial at Harvard showing that a purpose-built AI tutor outperformed active learning classrooms, not because it was an LLM, but because it was curriculum-specific, adaptive, and tested for transfer. That is the design this app attempts to replicate.
 
-**Live Demo:** [kestinbot.onrender.com](https://marcy-study-assistant.onrender.com)
+**Live Demo:** [kestinbot.onrender.com](https://kestinbot.onrender.com)
 
 ---
 

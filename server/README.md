@@ -1,124 +1,136 @@
 # KestinBot — Server
 
-Express/TypeScript backend for a RAG-powered tutoring chatbot built on the Marcy Lab School curriculum.
+Express (Node) API for the tutoring chatbot. The only chat route is `**POST /api/chat**`. Each request runs an **internal two-call pipeline** (comprehension → retrieval → answer), then returns structured JSON. Normative types, enums, and edge cases live in `**SCHEMA.md`**; this README is the narrative overview.
 
-## Architecture
+## What happens on `POST /api/chat`
 
 ```
 Client
   │
-  ├── POST /chat      → embed query → vector search → generate answer → return answer + sources
-  │
-  └── POST /classify  → assess comprehension → return teacher move (extend | build | backup)
-
-Supabase (pgvector)   ← stores curriculum chunks + embeddings
-OpenAI API            ← embeddings (text-embedding-3-small) + chat completions (gpt-4o-mini)
+  └── POST /api/chat  (messages + optional previousAssistantMove)
+            │
+            ├──► Call 1 — comprehension (small system prompt; NOT metaprompt.md)
+            │      → historySummary, studentComprehension
+            │
+            ├──► Retrieve (when DATABASE_URL is set)
+            │      Build embed text from historySummary + latest student message,
+            │      with the last question emphasized so long threads don’t drown short asks.
+            │      → text-embedding-3-small → pgvector top-k → chunks + sources
+            │
+            └──► Call 3 — answer (full metaprompt.md + injected context)
+                   System message includes:
+                     • metaprompt (pedagogy, moves, output rules)
+                     • Turn context: previousAssistantMove (from client)
+                     • Student comprehension: lost | partial | solid | off_topic
+                     • Concise history summary + verbatim last assistant + last student
+                     • Retrieved curriculum excerpts (if any)
+                   → model returns JSON: answer, move, rationale
+                   → HTTP response adds sources, retrieved_context
 ```
 
-## Endpoints
+The client always gets **one** assistant turn per request. It should echo back `**move`** as `**previousAssistantMove**` on the next call so Call 3 stays coherent.
 
-### `POST /chat`
+## Call 1 — comprehension
 
-Takes a student question and conversation history. Embeds the query, retrieves relevant curriculum chunks via vector similarity search, generates a Socratic response grounded in the curriculum.
+- **Input:** Trimmed transcript (last *n* turns, `CHAT_MAX_MESSAGES`) plus optional `previousAssistantMove`.
+- **Output (internal):** strict JSON with `historySummary` and `studentComprehension`.
+- **Prompting:** A **short** system instruction and JSON schema expectation—not `**metaprompt.md`**, which is reserved for Call 3.
+- **Model:** Often a **lighter** chat model for speed and cost; you can use the same model as Call 3 if comprehension quality needs it. Controlled via env (e.g. `OPENAI_CALL1_MODEL` alongside `OPENAI_CHAT_MODEL`).
 
-**Request**
+`studentComprehension` is one of: `**lost`**, `**partial**`, `**solid**`, `**off_topic**`. Call 3 uses it to calibrate depth and to choose a fitting `**move**` together with the latest message and prior move. For `**off_topic**`, the metaprompt directs a brief human response, then a gentle bridge back toward the learning goal.
+
+## Retrieval
+
+- **Single-stage** recall: one query embedding, top‑k from `**curriculum`** via pgvector.
+- **Query text** combines Call 1’s `**historySummary`** with the **most recent student message**, structured so the **latest question carries the most weight** (so retrieval stays specific, not repetitive mush).
+- **Embedding model** matches ingestion (default `**text-embedding-3-small`**; overridable via env). Chunks are injected under `**## Retrieved curriculum excerpts**` in the Call 3 system message. `**sources**` and `**retrieved_context**` on the HTTP response mirror what was injected.
+
+If `DATABASE_URL` is unset or retrieval fails, Call 3 still runs; excerpts are empty and the metaprompt tells the model how to behave without verified doc text.
+
+## Call 3 — answer
+
+- **Uses `metaprompt.md`** (loaded as the base system content).
+- **Chooses `move`** (`explain` | `check` | `probe` | `prompt`), **writes `answer`** to match that move, and **returns `move`** for continuity—not a post-hoc label on unrelated prose.
+- **Pedagogy:** clarity first—short, plain-language explanation or direct answer; then check, probe, or prompt as appropriate. Not Socratic-only, not “guess what I’m thinking.”
+
+## HTTP request
+
 ```json
 {
-  "message": "What is a closure?",
-  "history": [
-    { "role": "user", "content": "..." },
-    { "role": "assistant", "content": "..." }
-  ]
+  "messages": [
+    { "role": "user", "content": "What is a closure?" }
+  ],
+  "previousAssistantMove": "explain"
 }
 ```
 
-**Response**
+- `**messages**` — OpenAI-style roles and string `content`.
+- `**previousAssistantMove**` — Optional; last response’s `move`.
+
+## HTTP response
+
 ```json
 {
-  "answer": "Let's think about this together. What happens to a variable when a function finishes running?",
-  "sources": [
-    {
-      "title": "Scope and Closures",
-      "url": "https://github.com/The-Marcy-Lab-School/marcy-curriculum-docs/..."
-    }
-  ]
+  "answer": "…",
+  "move": "check",
+  "rationale": "…",
+  "sources": [],
+  "retrieved_context": ""
 }
 ```
 
-### `POST /classify`
+- `**answer**` — Only user-visible assistant text (no duplicate `message` field).
+- `**move**` — This turn’s `AssistantKind`.
+- `**rationale**` — One line; logging and debugging.
+- `**sources**` — Citation list when RAG returns rows; otherwise empty.
+- `**retrieved_context**` — Formatted chunk text injected this turn; may be empty.
 
-Takes conversation history and returns the implied next teacher move based on the student's demonstrated comprehension.
+Call 1 fields are **not** on the default response; they stay server-internal unless you add a debug or analytics flag later.
 
-**Request**
-```json
-{
-  "history": [
-    { "role": "user", "content": "..." },
-    { "role": "assistant", "content": "..." }
-  ]
-}
-```
+## Configuration (repo-root `.env`)
 
-**Response**
-```json
-{
-  "move": "build",
-  "rationale": "Student correctly identified the concept but has not applied it yet."
-}
-```
 
-**Teacher moves**
-| Move | Meaning |
-|------|---------|
-| `extend` | Student has demonstrated understanding — push to harder material |
-| `build` | Student is on track — reinforce and deepen current concept |
-| `backup` | Student is lost — step back to prerequisite concept |
+| Variable                 | Role                                                                |
+| ------------------------ | ------------------------------------------------------------------- |
+| `OPENAI_API_KEY`         | Required.                                                           |
+| `OPENAI_CHAT_MODEL`      | Call 3 completion model (default e.g. `gpt-4o-mini`).               |
+| `OPENAI_CALL1_MODEL`     | Optional. Call 1 model; falls back to Call 3 model if unset.        |
+| `OPENAI_EMBEDDING_MODEL` | Optional. Defaults to `text-embedding-3-small` (must match ingest). |
+| `DATABASE_URL`           | Optional. Enables RAG (Postgres + pgvector).                        |
+| `RAG_TOP_K`              | Optional. Chunk count (bounded).                                    |
+| `CHAT_MAX_MESSAGES`      | Optional. Max transcript turns sent to the models.                  |
 
-## Pedagogy
 
-The system prompt is grounded in Kestin & Miller's (2024) finding that AI tutoring works best when it:
-- Never gives the answer directly but scaffolds toward it with questions that point out gaps in understanding
-- Identifies and corrects misconceptions explicitly
-- Maintains a low-judgment tone so students feel safe being wrong
-- Adapts to the student's demonstrated comprehension each turn
+## Prerequisites and run
 
-`/classify` implements this by giving the client the next teacher move so the UI can respond accordingly — tightening or loosening the scaffolding dynamically.
+- Node.js 20+ (see root `package.json`).
+- Curriculum data and embeddings: `**/ingestion/`** and a populated `**curriculum**` table for RAG.
 
-## Prerequisites
-
-- Node.js v18+
-- Supabase account with pgvector enabled and curriculum ingested (see `/ingestion/README.md`)
-- OpenAI API key 
-
-## Setup
+From repo root:
 
 ```bash
-cd server
 npm install
 cp .env.example .env
-# fill in your keys
-npm run dev
+# set OPENAI_API_KEY; add DATABASE_URL for RAG
+npm run dev:api
 ```
 
-**.env.example**
-```
-SUPABASE_URL=https://xxxx.supabase.co
-SUPABASE_KEY=your-anon-key
-OPENAI_API_KEY=sk-...
-PORT=8080
-```
+From `server/`: `npm install && npm run dev` if the root workspace already installed deps.
 
-## Design Decisions
+## Source files
 
-**`text-embedding-3-small`** — cheap, fast, sufficient for curriculum-scale RAG. Cost per query is negligible.
 
-**`gpt-4o-mini`** — strong enough for Socratic tutoring at low cost. Swap to `gpt-4o` if response quality needs improvement.
+| File            | Responsibility                                                             |
+| --------------- | -------------------------------------------------------------------------- |
+| `index.js`      | Handler: Call 1 → embed/retrieve → Call 3; builds system message sections. |
+| `rag.js`        | Retrieval query text, embed, search, format chunks and `sources`.          |
+| `metaprompt.md` | Call 3 system instructions only.                                           |
+| `SCHEMA.md`     | Contract reference (enums, pipeline, HTTP types).                          |
 
-**Embedding happens server-side** — the client never sees raw vectors. `/chat` handles embed → retrieve → generate internally.
 
-**Sources returned with every answer** — students and instructors can verify answers against the actual curriculum. Builds trust and supports learning.
+## Roadmap (optional hardening)
 
-## Planned Features
+- Expose Call 1 output on the response for debugging.
+- Two-query retrieval + merge/rerank if single-stage recall plateaus.
+- Streaming responses while keeping the same final JSON shape (or SSE follow-up).
 
-- Topic classification to open the right coding environment or vetted resource in the browser
-- Streaming responses for better perceived performance

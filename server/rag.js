@@ -6,33 +6,50 @@ import pg from 'pg'
 const EMBED_MODEL =
   process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small'
 
-/** Build text to embed: last user message, or last user + prior assistant when short reply after a teaching move. */
-export function buildRetrievalText(messages, previousAssistantMove) {
-  if (!messages?.length) return ''
-  const last = messages[messages.length - 1]
-  if (last.role !== 'user') return ''
-  const text = last.content.trim()
-  if (!text) return ''
+/** Max chars of Call 1 summary mixed into the embed string (rest truncated). */
+const RETRIEVAL_SUMMARY_MAX_CHARS = 2000
 
-  let assistantBefore = ''
-  for (let i = messages.length - 2; i >= 0; i--) {
-    if (messages[i].role === 'assistant') {
-      assistantBefore = messages[i].content
-      break
+/** Last non-empty user message in the transcript (search from end). */
+export function getLastUserContent(messages) {
+  if (!messages?.length) return ''
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'user') {
+      const t = typeof m.content === 'string' ? m.content.trim() : ''
+      if (t) return t
     }
   }
+  return ''
+}
 
-  const short = text.length < 48
-  const afterTeach =
-    previousAssistantMove === 'check' ||
-    previousAssistantMove === 'explain' ||
-    previousAssistantMove === 'probe'
-
-  if (short && assistantBefore && afterTeach) {
-    const ctx = assistantBefore.trim().slice(0, 800)
-    return `Assistant context (for retrieval):\n${ctx}\n\nStudent message:\n${text}`
+/** Last non-empty assistant message in the transcript (search from end). */
+export function getLastAssistantContent(messages) {
+  if (!messages?.length) return ''
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'assistant') {
+      const t = typeof m.content === 'string' ? m.content.trim() : ''
+      if (t) return t
+    }
   }
-  return text
+  return ''
+}
+
+/**
+ * Text to embed for pgvector search: emphasizes the latest student message;
+ * optional Call 1 historySummary disambiguates long threads.
+ */
+export function buildRetrievalText(messages, historySummary = '') {
+  const lastUser = getLastUserContent(messages)
+  if (!lastUser) return ''
+  const raw =
+    typeof historySummary === 'string' ? historySummary.trim() : ''
+  const capped =
+    raw.length > RETRIEVAL_SUMMARY_MAX_CHARS
+      ? `${raw.slice(0, RETRIEVAL_SUMMARY_MAX_CHARS)}…`
+      : raw
+  if (!capped) return lastUser
+  return `Current question (primary search focus):\n${lastUser}\n\nThread context:\n${capped}\n\nSearch focus (repeat):\n${lastUser}`
 }
 
 export async function embedQuery(openai, text) {

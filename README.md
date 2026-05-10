@@ -32,20 +32,24 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 
 ## Stack
 
-| Layer | Choice |
-|-------|--------|
-| **Frontend** | React (Vite) |
-| **Backend** | Express on Node |
-| **Vectors** | Supabase Postgres + pgvector |
-| **Streaming** | Server-Sent Events (SSE) |
+
+| Layer         | Choice                       |
+| ------------- | ---------------------------- |
+| **Frontend**  | React (Vite)                 |
+| **Backend**   | Express on Node              |
+| **Vectors**   | Supabase Postgres + pgvector |
+| **Streaming** | Server-Sent Events (SSE)     |
+
 
 ### Embeddings & LLM
 
-| Role | Provider | Model |
-|------|----------|-------|
-| **Embeddings** | OpenAI | `text-embedding-3-small` |
-| **Generation** | OpenAI | `gpt-4o-mini` |
-| **Classification** | OpenAI | `gpt-4o-mini` |
+
+| Role               | Provider | Model                    |
+| ------------------ | -------- | ------------------------ |
+| **Embeddings**     | OpenAI   | `text-embedding-3-small` |
+| **Generation**     | OpenAI   | `gpt-4o-mini`            |
+| **Classification** | OpenAI   | `gpt-4o-mini`            |
+
 
 **Environment variables:** `OPENAI_API_KEY`, `DATABASE_URL` (Supabase)
 
@@ -100,16 +104,17 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 
 Renders the chat interface. Sends student messages to the API. Displays streamed assistant content as message bubbles.
 
-**The assistant turn sequence:**
+**or cThe assistant turn sequence:**
 
 Each explanation is followed by a check. The student's reply to the check determines the next move.
 
-| Bubble label | What it is |
-|---|---|
-| **Big idea** | The explanation, grounded in retrieved docs |
-| **Your turn** | The check, student rephrases in their own words |
-| **Let's dig deeper** | A follow-up when the reply needs more signal |
-| **What's next?** | Adaptive next step |
+
+| Bubble label         | What it is                                      |
+| -------------------- | ----------------------------------------------- |
+| **Big idea**         | The explanation, grounded in retrieved docs     |
+| **Your turn**        | The check, student rephrases in their own words |
+| **Let's dig deeper** | A follow-up when the reply needs more signal    |
+| **What's next?**     | Adaptive next step                              |
 
 
 **Resource chips** (always available allowing the student to control pace):
@@ -244,12 +249,14 @@ The LLM is stateless. Conversation history is managed by the API and passed expl
 
 One database. All data in one place.
 
-| Table | Contents |
-|-------|----------|
-| `chunks` | id, content, embedding (vector), topic tag |
-| `students` | id, created_at |
-| `conversations` | id, student_id, started_at |
-| `messages` | id (uuid), conversation_id, role, content, classification, branch, timestamp |
+
+| Table           | Contents                                                                     |
+| --------------- | ---------------------------------------------------------------------------- |
+| `chunks`        | id, content, embedding (vector), topic tag                                   |
+| `students`      | id, created_at                                                               |
+| `conversations` | id, student_id, started_at                                                   |
+| `messages`      | id (uuid), conversation_id, role, content, classification, branch, timestamp |
+
 
 **pgvector similarity search:**
 
@@ -265,7 +272,7 @@ LIMIT 5;
 
 ### Layer 5 — Ingestion (Python, one-time)
 
-Runs locally. The source material is not in this repo — the script expects a separate clone of [The-Marcy-Lab-School/marcy-curriculum-docs](https://github.com/The-Marcy-Lab-School/marcy-curriculum-docs). See [`ingestion/README.md`](ingestion/README.md) for setup.
+Runs locally. The source material is not in this repo — the script expects a separate clone of [The-Marcy-Lab-School/marcy-curriculum-docs](https://github.com/The-Marcy-Lab-School/marcy-curriculum-docs). See `[ingestion/README.md](ingestion/README.md)` for setup.
 
 **Chunking:**
 
@@ -300,11 +307,13 @@ The most important piece of the application. It tells the model to:
 
 After a student responds to the check, the app classifies the reply and branches:
 
-| Branch | When | What happens |
-|--------|------|--------------|
-| **extend** | Solid rephrasing | Harder material or a practice prompt |
-| **build** | Partial understanding | Same concept, different angle: analogy, example, diagram |
-| **backup** | Missing the foundation | Simpler chunks, prerequisites from the docs |
+
+| Branch     | When                   | What happens                                             |
+| ---------- | ---------------------- | -------------------------------------------------------- |
+| **extend** | Solid rephrasing       | Harder material or a practice prompt                     |
+| **build**  | Partial understanding  | Same concept, different angle: analogy, example, diagram |
+| **backup** | Missing the foundation | Simpler chunks, prerequisites from the docs              |
+
 
 The classifier reads what the student actually wrote, not a button they clicked. Students don't always know what they don't know, and self-report is unreliable. If a student's tone is confident but their rephrasing is off, the classifier follows the rephrasing.
 
@@ -398,22 +407,26 @@ Visit `http://localhost:5173`
 ## Roadmap
 
 **v2 — Logging and aggregation**
+
 - Persist classification results, which chunks fired, and which branch was taken on every interaction
 - The data is already partially there in the messages table; this version makes it queryable
 - Over time, patterns emerge from usage: which questions consistently route to **backup**, which chunks fire together, where the curriculum has gaps
 - This is the foundation everything else in the roadmap depends on. The instructor dashboard is an empty table without it
 
 **v3 — Generated coding challenges**
+
 - When the branch is extend, end the response with a small coding prompt scoped to the concept just covered and the student's apparent level
 - No new infrastructure: the challenge is generated by the same model, in the same call, shaped by the same retrieved chunks
 - The challenge difficulty comes from what the student demonstrated in their check reply, not from a tag someone assigned at ingestion time
 
 **v4 — Prerequisite mapping**
+
 - Encode the dependency graph of the Marcy curriculum (one-time authoring work)
 - When a student routes to **backup**, surface the prerequisite concept with a direct link to that section of the Marcy Docs
 - Example: struggling with `useEffect`, surface `useState` first
 
 **v5 — Video**
+
 - Ingest transcripts from a curated list of Marcy-aligned videos
 - Embed transcripts using the same model as the docs
 - Compare transcript embeddings against docs embeddings to filter out content that contradicts Marcy's patterns
@@ -421,22 +434,26 @@ Visit `http://localhost:5173`
 - More automatable than it sounds but requires someone to maintain the curated video list as the curriculum evolves
 
 **v6 — Claude for generation and classification**
+
 - Swap `gpt-4o-mini` for Anthropic's Claude on the generate and classify calls
 - Claude reasons more carefully about partial understanding, deflection, and the difference between confident-sounding and actually-correct student replies
 - Requires a second paid API (Anthropic); OpenAI remains for embeddings since `text-embedding-3-small` stays the same model at ingest and query time. Switching embedding providers means re-embedding the entire corpus
 - The pedagogical quality difference is real; this is the right upgrade once the app has users and the cost is justified
 
 **v7 — Memory**
+
 - Supabase Auth + OAuth for student identity
 - Conversation history persisted per student across sessions
 - Running summary passed to the model instead of raw message history to manage context length
 
 **v8 — Instructor dashboard**
+
 - Aggregate classification signals across the cohort
 - Surface which concepts are producing the most **backup** branches as a real-time formative signal
 - Only useful once v2 logging is in place and there are enough students to see patterns
 
 **v9 — Ping an instructor**
+
 - When the conversation reveals sustained struggle across multiple **backup** branches, present a path that lets the student flag a human instructor directly
 - Passive signal first visible to instructor dashboard in v8; active ping as opt-in
 
@@ -444,7 +461,7 @@ Visit `http://localhost:5173`
 
 ## References
 
-Kestin, G., Miller, K., Klales, A., Milbourne, T., & Ponti, G. (2025). *AI tutoring outperforms in-class active learning: an RCT introducing a novel research-based design in an authentic educational setting.* Scientific Reports, 15, 17458. https://doi.org/10.1038/s41598-025-97652-6
+Kestin, G., Miller, K., Klales, A., Milbourne, T., & Ponti, G. (2025). *AI tutoring outperforms in-class active learning: an RCT introducing a novel research-based design in an authentic educational setting.* Scientific Reports, 15, 17458. [https://doi.org/10.1038/s41598-025-97652-6](https://doi.org/10.1038/s41598-025-97652-6)
 
 ---
 

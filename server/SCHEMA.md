@@ -1,18 +1,76 @@
-# API Schema
+# API schema — `POST /api/chat`
 
-## `POST /chat`
+Stateless chat: the client sends the transcript; the server returns structured JSON. **RAG** adds retrieved text and `sources`. The server may run **multiple model calls** internally; the **HTTP** contract below is what the client sends and receives.
 
-### Request
+## Logical pipeline (server-side, inside `POST /api/chat`)
+
+
+| Phase                      | Owns                                            | Notes                                                                                                                                                                                                                                                        |
+| -------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Call 1 — comprehension** | `historySummary`, `studentComprehension`        | Input includes full `messages` and optional `previousAssistantMove`. Output is **not** returned to the client unless you add a debug flag later.                                                                                                             |
+| **Retrieve**               | Top‑k chunks                                    | Single-stage recall for now. Query text is built from **concise history summary + most recent student message** (aligned with ingest / embedding model).                                                                                                     |
+| **Call 3 — answer**        | `answer`, `move` (`AssistantKind`), `rationale` | The model **selects** `move` (via system / metaprompt rules using comprehension, prior move, and retrieved context), **uses** that choice to shape the reply, then **emits** `move` in JSON so the client can send `previousAssistantMove` on the next turn. |
+
+
+**Continuity:** Call 3 does not “only label” the message after the fact. It **decides** the teaching move, **writes** the user-facing text to match it, and **returns** the same `move` for the next request’s `previousAssistantMove`.
+
+### Call 1 output (internal JSON)
 
 ```typescript
 {
-  message: string;              // Current student input
-  history: Message[];           // Last n turns of conversation (see below)
-  retrieved_context?: string;   // RAG chunks returned from previous /chat turn — pass back for continuity
+  historySummary: string;       // Concise; used for retrieval query composition
+  studentComprehension: StudentComprehension;
 }
 ```
 
-### Message
+### `StudentComprehension`
+
+```typescript
+type StudentComprehension = "lost" | "partial" | "solid" | "off_topic";
+```
+
+- `**lost**` — student is confused or missing prerequisites; answer should ground and simplify.
+- `**partial**` — some understanding; tighten or correct, then extend.
+- `**solid**` — on track; can go deeper or broaden.
+- `off_topic` — respond in kind for one round then redirect gently toward the learning goal when appropriate.
+
+### Model choice for Call 1
+
+Using a **lighter** model for Call 1 is an allowed **implementation choice**: favor **speed / cost** over maximum reasoning depth. If comprehension feels noisy in production, swap or escalate the Call 1 model without changing the HTTP shape.
+
+---
+
+## RAG (embed → retrieve → generate)
+
+
+| Step                  | Input                                                                                                                                   | Output                                                                                            |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **Embed**             | Retrieval query text (from Call 1 summary + latest student message)                                                                     | `float[1536]` via OpenAI `**text-embedding-3-small`** (must match ingest)                         |
+| **Retrieve**          | Query vector + `k`                                                                                                                      | Top‑k chunk rows from Postgres / pgvector                                                         |
+| **Generate (Call 3)** | System / metaprompt + retrieved chunks + **summary + last assistant + last student** + `studentComprehension` + `previousAssistantMove` | Model JSON: `answer`, `move`, `rationale`; response also includes `sources` / `retrieved_context` |
+
+
+---
+
+## Pedagogy (what Call 3 sounds like)
+
+- Give a **short, plain-language** explanation or direct answer first—no riddles, no “guess what I’m thinking,” no lecture disguised as questions.
+- Then, as appropriate to the chosen `**move`**, **check** understanding, **probe** a gap, or **prompt** a next step—so the student can extend without being stranded.
+
+This is **not** a Socratic-only tutor: the default posture is **clarity first**, then a light interactive follow-up when it helps.
+
+---
+
+## HTTP request
+
+```typescript
+{
+  messages: Message[];
+  previousAssistantMove?: AssistantKind;
+}
+```
+
+### `Message`
 
 ```typescript
 {
@@ -21,107 +79,70 @@
 }
 ```
 
-### Response
+### `AssistantKind` (values for `previousAssistantMove` and response `move`)
 
 ```typescript
-{
-  answer: string;               // Socratic response grounded in curriculum
-  sources: Source[];            // Curriculum chunks that informed the answer
-  retrieved_context: string;    // RAG chunks used this turn — client stores and passes back next request
-}
+type AssistantKind = "explain" | "check" | "probe" | "prompt";
 ```
 
-### Source
-
-```typescript
-{
-  title: string;                // Section heading from curriculum
-  
-  url: string;                  // Link to source doc in Marcy GitHub repo
-}
-```
-
-### Example Request
+### Example request
 
 ```json
 {
-  "message": "What is a closure?",
-  "history": [
-    { "role": "user", "content": "I think scope means where a variable lives?" },
-    { "role": "assistant", "content": "That's a good start. What do you think happens to that variable when the function that created it finishes running?" }
-  ],
-  "retrieved_context": "...chunks from previous turn..."
-}
-```
-
-### Example Response
-
-```json
-{
-  "answer": "Good question. Before we define it, what do you think happens when a function returns — does it take its variables with it?",
-  "sources": [
-    {
-      "title": "Scope and Closures",
-      "url": "https://github.com/The-Marcy-Lab-School/marcy-curriculum-docs/blob/main/mod-2/closures.md"
-    }
-  ],
-  "retrieved_context": "...chunks used this turn, client passes back on next request..."
-}
-```
-
----
-
-## `POST /classify`
-
-### Request
-
-```typescript
-{
-  history: Message[];           // Full conversation to classify (same Message type as above)
-}
-```
-
-### Response
-
-```typescript
-{
-  move: "extend" | "build" | "backup";
-  rationale: string;            // One sentence explanation of the classification
-}
-```
-
-### Example Request
-
-```json
-{
-  "history": [
-    { "role": "user", "content": "Oh so the inner function remembers the outer function's variables even after it returns?" },
-    { "role": "assistant", "content": "Exactly. That's a closure. Can you think of a situation where that would be useful?" },
-    { "role": "user", "content": "Maybe like a counter that keeps its own count?" }
+  "messages": [
+    { "role": "user", "content": "What is a closure?" }
   ]
 }
 ```
 
-### Example Response
+---
+
+## HTTP response
+
+```typescript
+{
+  message: string;              // Same as answer (convenience)
+  answer: string;               // Plain language; shaped by emitted move
+  move: AssistantKind;          // Chosen in Call 3; echoed for continuity
+  rationale: string;            // One sentence; logging / debug
+  sources: Source[];            // RAG citations (may be empty)
+  retrieved_context: string;   // Chunks injected this turn (may be empty)
+}
+```
+
+### `Source` (when RAG is on)
+
+```typescript
+{
+  title: string;
+  url: string;                  // Stable link or path to curriculum doc
+}
+```
+
+### Example response
 
 ```json
 {
-  "move": "extend",
-  "rationale": "Student correctly identified the mechanism and generated an original use case unprompted."
+  "message": "A closure is when an inner function still sees variables from the outer function after the outer function finished running.\n\nQuick check: in one sentence, what stays “alive” for `inner` if it uses a variable declared in `outer`?",
+  "answer": "A closure is when an inner function still sees variables from the outer function after the outer function finished running.\n\nQuick check: in one sentence, what stays “alive” for `inner` if it uses a variable declared in `outer`?",
+  "move": "check",
+  "rationale": "Clear definition given; brief check to confirm they can restate the idea.",
+  "sources": [],
+  "retrieved_context": ""
 }
 ```
 
 ---
 
-## History Management
+## History
 
-The client is responsible for maintaining conversation history and passing the last `n` turns with each request. The server is stateless.
-
-**Recommended:** pass the last 6 turns (3 exchanges). More context improves classification accuracy but increases token cost.
+The client sends enough `**messages**` for context. The server may keep only the last *n* turns (`CHAT_MAX_MESSAGES` in env). Call 1 produces the **summary** used for retrieval; Call 3 should still receive **verbatim last assistant** and **last student** strings for grounding.
 
 ---
 
 ## Roadmap
 
-### Context Compression
-Currently the client passes raw conversation history. For longer sessions this will exceed the token budget. Planned: server-side context compression that summarizes older turns into a single context block, preserving meaning while reducing token cost. The client API contract stays the same — compression happens transparently server-side.
+- Optional: expose Call 1 fields on the response for debugging or analytics.
+- Optional: pass chunk IDs or `retrieved_context` back on the next request for debugging.
+- Long-session **context compression** server-side without changing the external shape—TBD.
+

@@ -1,6 +1,6 @@
 /**
  * Chat API for Marcybot. Loads repo-root .env + metaprompt from ./metaprompt.md.
- * POST /api/chat — JSON reply (answer + move + rationale); optional RAG when DATABASE_URL set.
+ * POST /api/chat — Call 1 (comprehension) → RAG (optional) → Call 3 JSON (answer, move, rationale).
  * Optional body.previousAssistantMove: prior turn's move from last response.
  */
 import fs from 'node:fs'
@@ -15,6 +15,8 @@ import {
   buildRetrievalText,
   embedQuery,
   formatChunksForPrompt,
+  getLastAssistantContent,
+  getLastUserContent,
   rowsToSources,
   searchSimilarChunks,
 } from './rag.js'
@@ -26,7 +28,9 @@ const rawCap = parseInt(process.env.CHAT_MAX_MESSAGES ?? '16', 10)
 const CHAT_MAX_MESSAGES =
   Number.isFinite(rawCap) && rawCap > 0 ? Math.min(rawCap, 100) : 16
 
-const MODEL = process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini'
+const CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini'
+const COMPREHENSION_MODEL =
+  process.env.OPENAI_COMPREHENSION_MODEL || CHAT_MODEL
 const RAG_TOP_K = Math.min(
   Math.max(parseInt(process.env.RAG_TOP_K ?? '5', 10) || 5, 1),
   20,
@@ -34,6 +38,13 @@ const RAG_TOP_K = Math.min(
 
 /** Same union as client `AssistantKind`; JSON field remains `move`. */
 const ASSISTANT_KINDS = new Set(['explain', 'check', 'probe', 'prompt'])
+
+const COMPREHENSION_KINDS = new Set([
+  'lost',
+  'partial',
+  'solid',
+  'off_topic',
+])
 
 let systemPromptText = ''
 try {
@@ -53,8 +64,19 @@ function metapromptForApi() {
   return lines.slice(start).join('\n').trim()
 }
 
-function systemContentForRequest(previousAssistantMove, retrievedExcerptBlock) {
+function systemContentForRequest({
+  previousAssistantMove,
+  retrievedExcerptBlock,
+  studentComprehension,
+  historySummary,
+  latestStudentMessage,
+  latestAssistantMessage,
+}) {
   let content = metapromptForApi()
+  content += `\n\n## Student comprehension (from analysis)\n\`${studentComprehension}\``
+  content += `\n\n## Thread summary (concise)\n${historySummary || '(none)'}`
+  content += `\n\n## Latest student message (verbatim)\n${latestStudentMessage || '(none)'}`
+  content += `\n\n## Latest assistant message (verbatim)\n${latestAssistantMessage || '(none yet)'}`
   if (
     typeof previousAssistantMove === 'string' &&
     ASSISTANT_KINDS.has(previousAssistantMove)
@@ -65,6 +87,56 @@ function systemContentForRequest(previousAssistantMove, retrievedExcerptBlock) {
     content += `\n\n## Retrieved curriculum excerpts\n\n${retrievedExcerptBlock}`
   }
   return content
+}
+
+function parseCall1Json(raw, recent) {
+  const lastUser = getLastUserContent(recent)
+  const fallback = {
+    historySummary: lastUser || 'Empty thread.',
+    studentComprehension: 'partial',
+  }
+  if (!raw || typeof raw !== 'string') return fallback
+  try {
+    const obj = JSON.parse(raw.trim())
+    let historySummary =
+      typeof obj.historySummary === 'string' ? obj.historySummary.trim() : ''
+    if (!historySummary && lastUser) historySummary = lastUser
+    const sc = obj.studentComprehension
+    const studentComprehension = COMPREHENSION_KINDS.has(sc)
+      ? sc
+      : 'partial'
+    return { historySummary, studentComprehension }
+  } catch {
+    return fallback
+  }
+}
+
+async function runComprehensionPass({ recent, previousAssistantMove }) {
+  const systemParts = [
+    'You summarize a tutoring chat (Marcy Lab School software curriculum) and classify the student’s current comprehension.',
+    'Reply with ONLY a JSON object (no markdown fences), keys:',
+    '  "historySummary": string — concise (about 2–6 sentences for a typical thread; shorter if the thread is tiny). Used for retrieval and disambiguation.',
+    '  "studentComprehension": exactly one of: lost, partial, solid, off_topic',
+    'Meanings: lost = confused or missing prerequisites; partial = some understanding, needs tightening; solid = on track; off_topic = tangential to the lesson goal.',
+  ]
+  if (
+    typeof previousAssistantMove === 'string' &&
+    ASSISTANT_KINDS.has(previousAssistantMove)
+  ) {
+    systemParts.push(
+      `The client reports the assistant’s previous move was: ${previousAssistantMove}.`,
+    )
+  }
+  const completion = await openai.chat.completions.create({
+    model: COMPREHENSION_MODEL,
+    messages: [
+      { role: 'system', content: systemParts.join('\n') },
+      ...recent,
+    ],
+    response_format: { type: 'json_object' },
+  })
+  const rawContent = completion.choices[0]?.message?.content ?? ''
+  return parseCall1Json(rawContent, recent)
 }
 
 const app = express()
@@ -110,12 +182,14 @@ function parseChatJson(raw) {
 app.post('/api/chat', async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) {
+      console.log('[chat] status=500 reason=OPENAI_API_KEY')
       res.status(500).json({ error: 'OPENAI_API_KEY missing in .env' })
       return
     }
 
     const bodyMessages = req.body?.messages
     if (!Array.isArray(bodyMessages)) {
+      console.log('[chat] status=400 reason=body.messages')
       res.status(400).json({ error: 'body.messages must be an array' })
       return
     }
@@ -133,10 +207,32 @@ app.post('/api/chat', async (req, res) => {
     }
 
     const recent = normalized.slice(-CHAT_MAX_MESSAGES)
+    if (recent.length === 0) {
+      console.log('[chat] status=400 reason=empty messages')
+      res.status(400).json({ error: 'messages must include at least one turn' })
+      return
+    }
+
+    let comprehension
+    try {
+      comprehension = await runComprehensionPass({
+        recent,
+        previousAssistantMove,
+      })
+    } catch (c1Err) {
+      console.error('Call 1 comprehension failed:', c1Err)
+      comprehension = {
+        historySummary: getLastUserContent(recent) || 'Empty thread.',
+        studentComprehension: 'partial',
+      }
+    }
 
     let retrievedContext = ''
     let sources = []
-    const retrievalText = buildRetrievalText(recent, previousAssistantMove)
+    const retrievalText = buildRetrievalText(
+      recent,
+      comprehension.historySummary,
+    )
     if (process.env.DATABASE_URL && retrievalText) {
       try {
         const embedding = await embedQuery(openai, retrievalText)
@@ -152,14 +248,18 @@ app.post('/api/chat', async (req, res) => {
 
     const system = {
       role: 'system',
-      content: systemContentForRequest(
+      content: systemContentForRequest({
         previousAssistantMove,
-        retrievedContext || '',
-      ),
+        retrievedExcerptBlock: retrievedContext || '',
+        studentComprehension: comprehension.studentComprehension,
+        historySummary: comprehension.historySummary,
+        latestStudentMessage: getLastUserContent(recent),
+        latestAssistantMessage: getLastAssistantContent(recent),
+      }),
     }
 
     const completion = await openai.chat.completions.create({
-      model: MODEL,
+      model: CHAT_MODEL,
       messages: [system, ...recent],
       response_format: { type: 'json_object' },
     })
@@ -167,8 +267,12 @@ app.post('/api/chat', async (req, res) => {
     const rawContent = completion.choices[0]?.message?.content ?? ''
     const parsed = parseChatJson(rawContent)
 
+    const chunkCount = sources.length
+    console.log(
+      `[chat] status=200 currentMove=${parsed.move} studentComprehension=${comprehension.studentComprehension} chunks=${chunkCount}`,
+    )
+
     res.json({
-      message: parsed.answer,
       answer: parsed.answer,
       move: parsed.move,
       rationale: parsed.rationale,
@@ -178,6 +282,7 @@ app.post('/api/chat', async (req, res) => {
   } catch (err) {
     console.error(err)
     const message = err instanceof Error ? err.message : 'chat failed'
+    console.log(`[chat] status=500 error=exception`)
     res.status(500).json({ error: message })
   }
 })
@@ -200,6 +305,6 @@ app.listen(PORT, () => {
     console.log(`Serving client from ${clientDist}`)
   }
   console.log(
-    `CHAT_MAX_MESSAGES=${CHAT_MAX_MESSAGES} model=${MODEL} RAG_TOP_K=${RAG_TOP_K} RAG=${process.env.DATABASE_URL ? 'on' : 'off'}`,
+    `CHAT_MAX_MESSAGES=${CHAT_MAX_MESSAGES} chat=${CHAT_MODEL} comprehension=${COMPREHENSION_MODEL} RAG_TOP_K=${RAG_TOP_K} RAG=${process.env.DATABASE_URL ? 'on' : 'off'}`,
   )
 })

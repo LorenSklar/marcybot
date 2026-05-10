@@ -69,25 +69,12 @@ function App() {
             : {}),
         }),
       })
-      const raw = await res.text()
-      let data: { message?: string; move?: string; error?: string } = {}
-      if (raw.trim()) {
-        try {
-          data = JSON.parse(raw) as typeof data
-        } catch {
-          throw new Error(
-            res.ok
-              ? `Invalid JSON from API (empty or non-JSON body). First chars: ${raw.slice(0, 120)}`
-              : `${res.status} ${res.statusText}: ${raw.slice(0, 200)}`,
-          )
-        }
-      } else if (!res.ok) {
-        throw new Error(`${res.status} ${res.statusText} (empty body)`)
-      }
+      const data: { answer?: string; move?: string; error?: string } =
+        await res.json()
       if (!res.ok) {
         throw new Error(data.error || res.statusText)
       }
-      const reply = data.message?.trim() || '(empty reply)'
+      const reply = data.answer?.trim() || '(empty reply)'
       if (isAssistantKind(data.move)) {
         setLastAssistantMove(data.move)
       }

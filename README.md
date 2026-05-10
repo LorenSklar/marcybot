@@ -1,6 +1,8 @@
 # KestinBot
 
-KestinBot is an AI-powered study assistant grounded in the Marcy Lab School curriculum. Students ask questions and get answers based on Marcy's own docs rather than Reddit or other generic internet knowledge. Most AI tools stop at the answer. KestinBot doesn't. Every answer is followed by a check for understanding where the student rephrases the concept in their own words. What they write back determines the bot's next move: **extend**, **build**, or **backup** (step back to more fundamental skills).
+KestinBot is an AI-powered study assistant grounded in the Marcy Lab School curriculum. Students ask questions and get answers based on Marcy's own docs rather than Reddit or other generic internet knowledge. Most AI tools stop at the answer. KestinBot doesn't. The design pushes toward **transfer**: after an explanation, the student is nudged to rephrase in their own words, and the tutor adapts based on what they actually wrote.
+
+**What ships today:** each `POST /api/chat` runs a **comprehension** pass on the thread (`lost` | `partial` | `solid` | `off_topic`), optionally retrieves top‑k curriculum chunks when `DATABASE_URL` is set, then returns a single JSON reply with assistant **`move`**: `explain` | `check` | `probe` | `prompt`. The metaprompt (`server/metaprompt.md`) ties those signals to the next utterance. A separate roadmap item (**v2.1**) adds the **extend / build / backup** naming layer for analytics and UI metacognition once classification and logging catch up.
 
 The name is deliberate. Kestin, Miller et al. (2025) ran a randomized controlled trial at Harvard showing that a purpose-built AI tutor outperformed active learning classrooms, not because it was an LLM, but because it was curriculum-specific, adaptive, and tested for transfer. That is the design this app attempts to replicate.
 
@@ -20,13 +22,12 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 
 ## How It Works
 
-1. Student asks a question
-2. The app embeds the query and runs a semantic search against the Marcy Docs vector index
-3. The top 5 most relevant chunks are passed to the OpenAI API with a carefully engineered system prompt
-4. The model streams back a plain-language explanation grounded in those chunks
-5. The bot follows up with a check, asking the student to explain it back
-6. The student's reply is classified: **extend**, **build**, or **backup**
-7. The next response branches accordingly, with resource chips that unlock based on the branch
+1. Student sends a message; the client posts the recent thread to `POST /api/chat`.
+2. The API runs a **comprehension** pass (structured JSON) on the thread.
+3. If `DATABASE_URL` is configured, the API **embeds** retrieval text, runs **pgvector** similarity search (default top **5** chunks), and injects excerpts into the system context.
+4. The API calls the chat model once and returns a **JSON** object: assistant prose (`answer`), **`move`**, optional `rationale`, and **source** metadata for retrieved chunks.
+5. Choreography (explain → check → probe / prompt) is driven by `move` and the metaprompt, not by a second HTTP round-trip per token.
+6. **Resource chips** in the UI are shortcuts (docs home / practice link); they are not yet driven by retrieval or by `move` (see roadmap).
 
 ---
 
@@ -38,7 +39,7 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 | **Frontend**  | React (Vite)                 |
 | **Backend**   | Express on Node              |
 | **Vectors**   | Supabase Postgres + pgvector |
-| **Streaming** | Server-Sent Events (SSE)     |
+| **Transport** | HTTP JSON (`POST /api/chat`); token streaming (e.g. SSE) not implemented yet |
 
 
 ### Embeddings & LLM
@@ -48,7 +49,7 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 | ------------------ | -------- | ------------------------ |
 | **Embeddings**     | OpenAI   | `text-embedding-3-small` |
 | **Generation**     | OpenAI   | `gpt-4o-mini`            |
-| **Classification** | OpenAI   | `gpt-4o-mini`            |
+| **Comprehension pass** | OpenAI   | `gpt-4o-mini` (JSON summary + `studentComprehension`) |
 
 
 **Environment variables:** `OPENAI_API_KEY`, `DATABASE_URL` (Supabase)
@@ -60,27 +61,25 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   React Frontend                    │
-│     Chat UI — SSE stream in, structured turns out   │
+│     Chat UI — POST thread, JSON assistant reply     │
 └─────────────────────────┬───────────────────────────┘
-                          │ HTTP + SSE
+                          │ HTTP JSON
                           ▼
 ┌─────────────────────────────────────────────────────┐
 │              Node / Express API                     │
-│   Routes, session state, RAG orchestration,         │
-│   SSE stream management                             │
-└──────┬──────────────────┬──────────────────┬────────┘
-       │                  │                  │
-       ▼                  ▼                  ▼
-┌─────────────┐  ┌────────────────┐  ┌──────────────────┐
-│ Embed query │  │ Generate answer│  │ Classify reply   │
-│ OpenAI API  │  │ OpenAI API     │  │ OpenAI API       │
-└──────┬──────┘  └────────┬───────┘  └──────────────────┘
-       │                  │
-       ▼                  ▼
+│   RAG orchestration, comprehension + generate JSON   │
+└──────────────────────────┬──────────────────────────┘
+                           │
+                           ▼
 ┌─────────────────────────────────────────────────────┐
-│           Postgres + pgvector — Supabase            │
-│  Chunks, embeddings, similarity search,             │
-│  conversation history, student state                │
+│ OpenAI — comprehension JSON, embeddings (RAG),        │
+│ chat completion JSON (`answer` + `move`)             │
+└──────────────────────────┬──────────────────────────┘
+                           │ similarity search when RAG on
+                           ▼
+┌─────────────────────────────────────────────────────┐
+│ Postgres + pgvector — `curriculum` chunks            │
+│ (conversation persistence — roadmap)                 │
 └─────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────┐
@@ -102,146 +101,102 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 
 ### Layer 1 — UI (React)
 
-Renders the chat interface. Sends student messages to the API. Displays streamed assistant content as message bubbles.
+Renders the chat interface. The client keeps a **linear list** of messages (`user` | `assistant`), sends the recent thread as JSON on each send, and renders assistant text as **Markdown**. The last assistant **`move`** from the API is echoed on the next request as `previousAssistantMove` so the model knows what beat it just played.
 
-**or cThe assistant turn sequence:**
+**Resource chips** (dock shortcuts — not yet wired to retrieval or `move`):
 
-Each explanation is followed by a check. The student's reply to the check determines the next move.
+- **Read** — opens a configured Marcy Docs URL (default: published curriculum, e.g. Welcome → Course Modules); env: `VITE_MARCY_DOCS_HOME_URL`
+- **Practice** — opens a configured practice URL (default: JS Bin JavaScript pane); env: `VITE_PRACTICE_URL`
+- **Watch** / **Peer** — visible placeholders, disabled until curated video and peer flows exist
 
+Chips are pacing shortcuts, not gates. A student can ignore them and keep chatting.
 
-| Bubble label         | What it is                                      |
-| -------------------- | ----------------------------------------------- |
-| **Big idea**         | The explanation, grounded in retrieved docs     |
-| **Your turn**        | The check, student rephrases in their own words |
-| **Let's dig deeper** | A follow-up when the reply needs more signal    |
-| **What's next?**     | Adaptive next step                              |
+**Contract: UI → API** (implemented)
 
-
-**Resource chips** (always available allowing the student to control pace):
-
-- **Read the Docs** — links to the relevant Marcy Docs section
-- **Practice Coding** — opens [PickCode](https://pickcode.io) or [CodePen](https://codepen.io) in a new tab
-- **Ask a Peer** — a low stakes path to human help
-
-Chips are pacing tools, not gates. A student can skip any chip and keep asking questions. The student controls the pace, that's by design.
-
-**How many checks before branching?**
-
-Default: one check per beat. If the reply is thin or off-target, one follow-up. After two checks without a clear signal, stop and branch. A long check loop feels like an interrogation and tanks trust.
-
-**Contract: UI → API**
-
-```
+```json
 POST /api/chat
 {
-  student_id: string,
-  conversation_id: string,
-  message: string
+  "messages": [
+    { "role": "user", "content": "string" },
+    { "role": "assistant", "content": "string" }
+  ],
+  "previousAssistantMove": "explain"
 }
 ```
 
-**Contract: API → UI (assistant pieces)**
+`previousAssistantMove` is optional; omit on the first turn. Values: `explain` | `check` | `probe` | `prompt`.
 
-Each assistant message has a `kind` and `text`. A shared `turn_id` groups messages that belong to the same instructional beat.
+**Contract: API → UI** (implemented)
 
-```ts
-type Branch = "extend" | "build" | "backup";
-
-type ResourceState = "disable" | "show" | "emphasize";
-
-type AssistantKind = "explain" | "check" | "probe" | "prompt";
-
-type TurnMeta = {
-  branch: Branch;
-  resource_hints: {
-    docs: ResourceState;
-    coding: ResourceState;
-    peer: ResourceState;
-  };
-};
-
-type AssistantMessage = {
-  id: string;               // UUID from Postgres
-  turn_id: string;          // groups messages in one beat
-  role: "assistant";
-  kind: AssistantKind;
-  text: string;
-  meta?: TurnMeta; 
-  created_at: string;
-  in_reply_to_message_id?: string | null;
-};
+```json
+{
+  "answer": "string",
+  "move": "check",
+  "rationale": "string",
+  "sources": [],
+  "retrieved_context": "string"
+}
 ```
 
-**Thread model (frontend)**
+The client appends `answer` as the next assistant bubble. `sources` lists retrieved chunks (citations) when RAG ran.
 
-```ts
-type ThreadItem =
-  | {
-      id: string;
-      turn_id: string;
-      role: "student";
-      content: string;
-      created_at: string;
-      in_reply_to_message_id?: string | null;
-    }
-  | AssistantMessage;
-```
-
-**On identifiers:**
-Persisted rows use UUID primary keys generated by Postgres (`DEFAULT gen_random_uuid()`). The client treats `id` and `turn_id` as opaque strings. For optimistic UI, assign a provisional `crypto.randomUUID()` client-side and replace with the server-returned id after insert.
+**Thread model (frontend, today):** in-memory React state only; no `student_id` / `conversation_id` on the wire yet. Persisted UUIDs and `turn_id` grouping are roadmap (see v2 / v7).
 
 ---
 
 ### Layer 2 — API (Node / Express)
 
-Orchestrates the request pipeline. Manages conversation history. Routes the classified reply to the correct branch.
+Orchestrates each turn: normalize `messages`, run **comprehension**, optionally **retrieve** + format chunks, assemble **system** prompt, call chat completion with **`response_format: json_object`**, return one JSON payload. Does not persist the transcript to Postgres yet (see roadmap).
 
 **Contract: API → Embed**
 
 ```
-Input:  message string
+Input:  message string (retrieval text from latest user message + summary)
 Output: float[1536]  (text-embedding-3-small)
 ```
 
 **Contract: API → pgvector**
 
 ```
-Input:  query vector, k = 5
-Output: top 5 semantically similar chunk texts
+Input:  query vector, k = 5 (configurable)
+Output: top k rows from `curriculum` (content + source_path + headers)
+```
+
+**Contract: API → OpenAI (comprehension)**
+
+```
+Input:  recent thread (bounded window)
+Output: JSON { historySummary, studentComprehension }
+         studentComprehension ∈ { lost, partial, solid, off_topic }
 ```
 
 **Contract: API → OpenAI (generate)**
 
 ```
-Input:  system prompt + retrieved chunks + last 6 messages + student message
-Output: streamed tokens → forwarded to client as SSE (text/event-stream)
+Input:  system prompt + retrieved excerpts + recent messages
+Output: JSON { answer, move, rationale }
+         move ∈ { explain, check, probe, prompt }
 ```
 
-**Contract: API → OpenAI (classify)**
+**Contract: API → DB (write)** — roadmap
 
 ```
-Input:  student's check reply + conversation context
-Output: one of [ "extend" | "build" | "backup" ]
-```
-
-**Contract: API → DB (write)**
-
-```
-Per interaction: student_id, conversation_id, message, role,
-                 classification result, branch taken, timestamp
+Future: per interaction persistence (student, conversation, message, signals)
 ```
 
 ---
 
 ### Layer 3 — LLM Calls (OpenAI)
 
-Three steps per student interaction:
+Per student message (typical path):
 
-1. **Embed** — student message → vector (OpenAI `text-embedding-3-small`, same model as ingestion)
-2. **Generate** — curriculum-grounded explanation (OpenAI `gpt-4o-mini`), streamed token-by-token as SSE
-3. **Classify** — branch label from check reply + context (OpenAI `gpt-4o-mini`)
+1. **Comprehension** — thread → JSON summary + `studentComprehension` (`gpt-4o-mini`, structured output)
+2. **Embed** (if RAG on) — retrieval text → vector (`text-embedding-3-small`, same model as ingestion)
+3. **Generate** — system prompt + excerpts + thread → JSON `answer` + `move` + `rationale` (`gpt-4o-mini`, structured output)
 
-The LLM is stateless. Conversation history is managed by the API and passed explicitly on every call.
+The LLM is stateless. Conversation history is passed explicitly on every call; the client also passes `previousAssistantMove` for continuity.
+
+**Note:** Token streaming (SSE or similar) is **not** the same problem as auth or transport security. Today the server waits for the full model JSON; streaming would be a UX/perf change only.
 
 ---
 
@@ -252,16 +207,16 @@ One database. All data in one place.
 
 | Table           | Contents                                                                     |
 | --------------- | ---------------------------------------------------------------------------- |
-| `chunks`        | id, content, embedding (vector), topic tag                                   |
-| `students`      | id, created_at                                                               |
-| `conversations` | id, student_id, started_at                                                   |
-| `messages`      | id (uuid), conversation_id, role, content, classification, branch, timestamp |
+| `curriculum`    | id, content, embedding (vector), source_path, header fields (see `db/schema.sql`) |
+| `students`      | id, created_at (roadmap / not required for current demo)                      |
+| `conversations` | id, student_id, started_at (roadmap)                                         |
+| `messages`      | id (uuid), conversation_id, role, content, signals, timestamp (roadmap)     |
 
 
 **pgvector similarity search:**
 
 ```sql
-SELECT content FROM chunks
+SELECT content FROM curriculum
 ORDER BY embedding <=> $1
 LIMIT 5;
 ```
@@ -298,26 +253,32 @@ The most important piece of the application. It tells the model to:
 - Answer only from retrieved Marcy Docs content — if the context doesn't cover it, say so
 - Explain concepts in plain language, not textbook prose
 - Ask the student to rephrase after each explanation — in their own words, not copied back
-- Use the classified branch to shape the next response
+- Use comprehension + `move` to shape the next response
 - Be direct, warm, and non-judgmental
 
 ---
 
-## The Three Branches
+## Assistant `move` and comprehension (what ships)
 
-After a student responds to the check, the app classifies the reply and branches:
+The API does not yet expose **extend / build / backup** as explicit enums. Those labels remain the **research-facing** vocabulary for how we want to *describe* adaptation and logging (see **v2.1**). Operationally, the model returns **`move`** and the comprehension pass returns **`studentComprehension`**:
 
+| `studentComprehension` | Meaning (rough) |
+| ---------------------- | ---------------- |
+| **lost**               | Confused or missing prerequisites |
+| **partial**            | Some understanding; needs tightening |
+| **solid**              | On track |
+| **off_topic**          | Tangential to the lesson goal |
 
-| Branch     | When                   | What happens                                             |
-| ---------- | ---------------------- | -------------------------------------------------------- |
-| **extend** | Solid rephrasing       | Harder material or a practice prompt                     |
-| **build**  | Partial understanding  | Same concept, different angle: analogy, example, diagram |
-| **backup** | Missing the foundation | Simpler chunks, prerequisites from the docs              |
+| `move`    | Role (high level) |
+| --------- | ----------------- |
+| **explain** | Teach / clarify from retrieved context |
+| **check**   | Ask the student to rephrase or demonstrate understanding |
+| **probe**   | Follow up when the reply is thin or unclear |
+| **prompt**  | Nudge toward application (e.g. small task, next step) |
 
+The comprehension pass and the final JSON reply both read what the student actually wrote, not a chip they clicked.
 
-The classifier reads what the student actually wrote, not a button they clicked. Students don't always know what they don't know, and self-report is unreliable. If a student's tone is confident but their rephrasing is off, the classifier follows the rephrasing.
-
-This design is grounded in Kestin, Miller et al. (2025), a Harvard randomized controlled trial published in Scientific Reports. The study found that AI tutors outperform active learning classrooms when they are curriculum-specific, adaptive, and test for transfer, not just completion. The check is that transfer test.
+**Design target (Kestin et al., 2025):** curriculum-specific tutoring that tests **transfer**, not only completion. The **extend / build / backup** triangle is how we want to *name* those adaptations for instructors and analytics once classification and UI catch up (**v2.1**, **v2** logging).
 
 ---
 
@@ -327,7 +288,7 @@ This design is grounded in Kestin, Miller et al. (2025), a Harvard randomized co
 
 **Python for ingestion, JavaScript for everything else:** Ingestion is a one-time offline script. Python fits text splitting and batch embedding jobs cleanly. The app stays Node/React, Marcy's teaching stack.
 
-**SSE over WebSockets:** Streaming LLM output is unidirectional, server to client. SSE is simpler, requires no upgrade handshake, and is native to the browser's `EventSource` API. WebSockets add complexity without adding anything here.
+**JSON response today; SSE later:** The chat completion is consumed as a single JSON object per turn. **Server-Sent Events** (or chunked streaming) would let tokens appear incrementally in the UI; that is independent of **auth** or TLS. When we add streaming, it will still be the same `POST /api/chat` contract from the client’s perspective unless we deliberately split endpoints.
 
 **OpenAI for everything:** Embeddings, generation, and classification all use the OpenAI API. One SDK, one API key, one bill. `gpt-4o-mini` is fast and cheap for a proof-of-concept. Claude (Anthropic) offers meaningfully better pedagogical reasoning and is the upgrade path in the roadmap, but consolidating on OpenAI removes a dependency and keeps the architecture simple to explain and debug.
 
@@ -408,9 +369,9 @@ Visit `http://localhost:5173`
 
 **v2 — Logging and aggregation**
 
-- Persist classification results, which chunks fired, and which branch was taken on every interaction
-- The data is already partially there in the messages table; this version makes it queryable
-- Over time, patterns emerge from usage: which questions consistently route to **backup**, which chunks fire together, where the curriculum has gaps
+- Persist `studentComprehension`, `move`, which chunks fired, and (once **v2.1** lands) the **extend / build / backup** label on every interaction
+- Schema today is still evolving; this version makes cohort-level queries real
+- Over time, patterns emerge from usage: which questions consistently need prerequisite-style routing (**backup** in the research vocabulary), which chunks fire together, where the curriculum has gaps
 - This is the foundation everything else in the roadmap depends on. The instructor dashboard is an empty table without it
 
 **Refactor — Default explain → transfer (product shape)**
@@ -419,9 +380,15 @@ Visit `http://localhost:5173`
 - **Stretch:** How wide the transfer step is (micro what-if vs open editor) also scales with state; **prompt to code sooner than textbook habits** when the student can carry the load.
 - **Today:** Encoded in `server/metaprompt.md` and the `move` enum returned from `/api/chat`. **Next:** Treat the two beats as **first-class** in logging (v2) and optionally in response shape so tuning doesn’t rely on prompt prose alone.
 
+**v2.1 — Metacognition: labels, branches, and resource hints**
+
+- **Bubble labels** in the UI (e.g. Big idea, Your turn, Let’s dig deeper, What’s next?) so students see *what kind of turn* they’re in, not only prose
+- **Classifier output** aligned with the research framing: explicit **`extend` | `build` | `backup`** (or equivalent) derived from `studentComprehension`, check replies, and `move`, logged alongside the raw signals for instructors
+- **Resource hints** optional in the API: which chips to emphasize or defer based on that branch (today chips are static shortcuts)
+
 **v3 — Generated coding challenges**
 
-- When a turn ends with **`prompt`** (or the transfer beat is **extend** / hands-on), include a **small coding task** scoped to the concept just covered and the student’s apparent level—not only when a legacy “extend branch” fires
+- When a turn ends with **`prompt`** (or the student is ready for a hands-on beat), include a **small coding task** scoped to the concept just covered and the student’s apparent level
 - No new infrastructure: the challenge is generated by the same model, in the same call, shaped by the same retrieved chunks
 - The challenge difficulty comes from what the student demonstrated in their check reply, not from a tag someone assigned at ingestion time
 
@@ -439,9 +406,9 @@ Visit `http://localhost:5173`
 - Unlock a Watch chip only when a video's content semantically matches the question and aligns with the docs
 - More automatable than it sounds but requires someone to maintain the curated video list as the curriculum evolves
 
-**v6 — Claude for generation and classification**
+**v6 — Claude for generation and comprehension**
 
-- Swap `gpt-4o-mini` for Anthropic's Claude on the generate and classify calls
+- Swap `gpt-4o-mini` for Anthropic's Claude on the generate and comprehension passes
 - Claude reasons more carefully about partial understanding, deflection, and the difference between confident-sounding and actually-correct student replies
 - Requires a second paid API (Anthropic); OpenAI remains for embeddings since `text-embedding-3-small` stays the same model at ingest and query time. Switching embedding providers means re-embedding the entire corpus
 - The pedagogical quality difference is real; this is the right upgrade once the app has users and the cost is justified

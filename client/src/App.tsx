@@ -100,7 +100,7 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1 className="app-title">Marcybot</h1>
+        <h1 className="app-title">KestinBot x Marcy Lab School</h1>
       </header>
 
       <main className="app-main" id="conversation" aria-label="Conversation">

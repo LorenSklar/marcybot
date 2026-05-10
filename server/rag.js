@@ -116,21 +116,70 @@ export function formatChunksForPrompt(rows) {
     .join('\n\n')
 }
 
-function curriculumSourceUrl(sourcePath) {
+/**
+ * GitBook published site does not use repo-relative README paths: e.g.
+ * `mod-1-javascript-fundamentals/README.md` → `mod-1-javascript-fundamentals.md`,
+ * root `README.md` → `readme.md`. Repo paths from ingestion stay Git-shaped until here.
+ */
+function gitBookPublishedRelativePath(relPath) {
+  const p = String(relPath).replace(/^\//, '').replace(/\\/g, '/')
+  if (/^README\.md$/i.test(p)) return 'readme.md'
+  return p.replace(/\/README\.md$/i, '.md')
+}
+
+/**
+ * Browser URLs on gitbook.io should not end in `.md` — that path is for markdown/API
+ * clients and can break normal HTML reading. Strip one trailing `.md` after README rules.
+ */
+function gitBookBrowserRelativePath(relPath) {
+  let p = gitBookPublishedRelativePath(relPath)
+  if (p.endsWith('.md')) p = p.slice(0, -3)
+  // Root welcome page: extensionless site root, not /readme
+  if (p === 'readme') return ''
+  return p
+}
+
+/**
+ * GitBook anchors: lowercase, dashes; headings like "## 2. Data Types" usually anchor
+ * without the leading number.
+ */
+function slugifyHeadingForFragment(heading) {
+  if (!heading || typeof heading !== 'string') return ''
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/^\d+(?:\.\d+)*\.?\s+/, '')
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+function curriculumSourceUrl(sourcePath, sectionHeading = '') {
   if (!sourcePath) return ''
   if (/^https?:\/\//i.test(sourcePath)) return sourcePath
   const base =
     process.env.CURRICULUM_SOURCE_BASE_URL ||
     'https://github.com/The-Marcy-Lab-School/marcy-curriculum-docs/blob/main/'
   const normalized = base.replace(/\/?$/, '/')
-  const path = String(sourcePath).replace(/^\//, '')
-  return normalized + path
+  let rel = String(sourcePath).replace(/^\//, '')
+  const isGitBook = /gitbook\.io/i.test(base)
+  if (isGitBook) {
+    rel = gitBookBrowserRelativePath(rel)
+  }
+  let url = normalized + rel
+  if (isGitBook && sectionHeading) {
+    const frag = slugifyHeadingForFragment(sectionHeading)
+    if (frag) url += `#${frag}`
+  }
+  return url
 }
 
 export function rowsToSources(rows) {
   return rows.map((c) => ({
     title: c.header_2 || c.header_1 || c.source_path,
-    url: curriculumSourceUrl(c.source_path),
+    url: curriculumSourceUrl(c.source_path, c.header_2 || c.header_1 || ''),
     source_path: c.source_path,
   }))
 }

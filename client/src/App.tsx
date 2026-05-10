@@ -34,6 +34,20 @@ function isAssistantKind(v: unknown): v is AssistantKind {
   return typeof v === 'string' && (ASSISTANT_KINDS as string[]).includes(v)
 }
 
+type ChatSource = {
+  url?: string
+  source_path?: string
+  title?: string
+}
+
+function firstReadUrl(sources: unknown): string | null {
+  if (!Array.isArray(sources) || sources.length === 0) return null
+  const s = sources[0] as ChatSource
+  const u = typeof s.url === 'string' ? s.url.trim() : ''
+  if (u.startsWith('http://') || u.startsWith('https://')) return u
+  return null
+}
+
 const MARCY_DOCS_HOME =
   import.meta.env.VITE_MARCY_DOCS_HOME_URL ||
   'https://marcylabschool.gitbook.io/marcy-lab-school-docs#course-modules'
@@ -57,6 +71,8 @@ function App() {
   const [lastAssistantMove, setLastAssistantMove] = useState<AssistantKind | null>(
     null,
   )
+  /** Rank-1 retrieval target for Read, or null → fall back to static docs home. */
+  const [readUrlFromRag, setReadUrlFromRag] = useState<string | null>(null)
 
   async function sendMessage() {
     const text = draft.trim()
@@ -83,8 +99,12 @@ function App() {
             : {}),
         }),
       })
-      const data: { answer?: string; move?: string; error?: string } =
-        await res.json()
+      const data: {
+        answer?: string
+        move?: string
+        error?: string
+        sources?: unknown
+      } = await res.json()
       if (!res.ok) {
         throw new Error(data.error || res.statusText)
       }
@@ -92,12 +112,14 @@ function App() {
       if (isAssistantKind(data.move)) {
         setLastAssistantMove(data.move)
       }
+      setReadUrlFromRag(firstReadUrl(data.sources))
       setMessages((prev) => [
         ...prev,
         { id: newMessageId(), role: 'assistant', text: reply },
       ])
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Request failed'
+      setReadUrlFromRag(null)
       setMessages((prev) => [
         ...prev,
         {
@@ -128,10 +150,6 @@ function App() {
               When the explanation in class just didn’t click, 
               or you didn’t want to draw attention by raising your hand.
               Ask here with no judgement. Learn at your own pace. Available anytime.
-            </p>
-            <p className="app-onboarding-cta">
-              What are you curious about?
-              Ask me a question and level up.
             </p>
           </div>
         ) : (
@@ -165,12 +183,18 @@ function App() {
             id="message-input"
             className="app-input"
             name="message"
-            placeholder="Ask about the Marcy curriculum…"
+            placeholder="Ask me a question and level up"
             rows={2}
             autoComplete="off"
             value={draft}
             disabled={sending}
             onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' || e.shiftKey) return
+              if (e.nativeEvent.isComposing) return
+              e.preventDefault()
+              void sendMessage()
+            }}
           />
           <button
             type="button"
@@ -195,8 +219,12 @@ function App() {
             type="button"
             className="app-chip"
             disabled={sending}
-            title="Open Marcy curriculum docs"
-            onClick={() => openExternalTab(MARCY_DOCS_HOME)}
+            title={
+              readUrlFromRag
+                ? 'Open top matching Marcy doc (from last reply)'
+                : 'Open Marcy curriculum docs (ask a question for a section link when RAG is on)'
+            }
+            onClick={() => openExternalTab(readUrlFromRag || MARCY_DOCS_HOME)}
           >
             <BookOpen className="app-chip-icon" aria-hidden />
             <span className="app-chip-label">Read</span>

@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown'
+import rehypeRaw from 'rehype-raw'
 import rehypeSanitize from 'rehype-sanitize'
 import type { Components } from 'react-markdown'
 
@@ -19,11 +20,14 @@ type Props = {
   text: string
 }
 
-/** Renders assistant replies: fenced code blocks + light Markdown, sanitized. */
+/** Renders assistant replies: Markdown plus inline HTML (models often emit `<p>`, lists, etc.). Raw HTML is parsed then sanitized. */
 export function AssistantMessageBody({ text }: Props) {
   return (
     <div className="app-md">
-      <ReactMarkdown rehypePlugins={[rehypeSanitize]} components={markdownComponents}>
+      <ReactMarkdown
+        rehypePlugins={[rehypeRaw, rehypeSanitize]}
+        components={markdownComponents}
+      >
         {text}
       </ReactMarkdown>
     </div>

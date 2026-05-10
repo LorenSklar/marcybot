@@ -105,12 +105,17 @@ function App() {
 
       <main className="app-main" id="conversation" aria-label="Conversation">
         {messages.length === 0 ? (
-          <p className="app-placeholder">
-            Send a message below. Replies use OpenAI via{' '}
-            <code className="app-inline-code">POST /api/chat</code> (run{' '}
-            <code className="app-inline-code">npm run dev:api</code> in another
-            terminal).
-          </p>
+          <div className="app-onboarding">
+            <p className="app-placeholder">
+              <strong>KestinBot</strong> is a study assistant for 
+              <strong>Marcy Lab School</strong> software engineering. 
+              Ask in plain English and get a quick answer grounded in
+              Marcy’s curriculum. <br/><br/>
+              When the explanation in class just didn’t click, 
+              or you didn’t want to draw attention by raising your hand.
+              Ask here with no judgement. Learn at your own pace. Available anytime.
+            </p>
+          </div>
         ) : (
           <ul className="app-messages" aria-live="polite">
             {messages.map((m) => (
@@ -136,7 +141,7 @@ function App() {
           id="message-input"
           className="app-input"
           name="message"
-          placeholder="Ask about the Marcy curriculum…"
+          placeholder="Ask me a question and level up"
           rows={2}
           autoComplete="off"
           value={draft}

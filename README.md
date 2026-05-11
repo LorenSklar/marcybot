@@ -2,8 +2,6 @@
 
 KestinBot is an AI-powered study assistant grounded in the Marcy Lab School curriculum. Students ask questions and get answers based on Marcy's own docs rather than Reddit or other generic internet knowledge. Most AI tools stop at the answer. KestinBot doesn't. The design pushes toward **transfer**: after an explanation, the student is nudged to rephrase in their own words, and the tutor adapts based on what they actually wrote.
 
-**What ships today:** each `POST /api/chat` runs a **comprehension** pass on the thread (`lost` | `partial` | `solid` | `off_topic`), optionally retrieves top‑k curriculum chunks when `DATABASE_URL` is set, then returns a single JSON reply with assistant **`move`**: `explain` | `check` | `probe` | `prompt`. The metaprompt (`server/metaprompt.md`) ties those signals to the next utterance. A separate roadmap item (**v2.1**) adds the **extend / build / backup** naming layer for analytics and UI metacognition once classification and logging catch up.
-
 The name is deliberate. Kestin, Miller et al. (2025) ran a randomized controlled trial at Harvard showing that a purpose-built AI tutor outperformed active learning classrooms, not because it was an LLM, but because it was curriculum-specific, adaptive, and tested for transfer. That is the design this app attempts to replicate.
 
 **Live Demo:** [kestinbot.onrender.com](https://kestinbot.onrender.com)
@@ -16,18 +14,17 @@ Generic AI tools like ChatGPT give generic answers. They don't know that Marcy u
 
 KestinBot retrieves the most relevant sections of the Marcy Docs before generating any response. The LLM never improvises. It works only from what was retrieved.
 
-After each explanation, the bot asks the student to rephrase the concept in their own words, not copy it back, but explain it like they'd text a friend who missed class. A Harvard randomized controlled trial (Kestin et al., 2025) found that AI tutors outperform active learning classrooms specifically when they test for transfer rather than completion. That check is the transfer test. A student who can rephrase it understood it. A student who can't needs to clarify their understanding or go back to more basic skills.
+After each explanation, the bot asks the student to rephrase the concept in their own words, not copy it back, but explain it like they'd text a friend who missed class. The Kestin study found that AI tutors outperform active learning classrooms specifically when they test for transfer rather than completion. That check is the transfer test. A student who can rephrase it understood it. A student who can't needs to clarify their understanding or go back to more foundational skills.
 
 ---
 
 ## How It Works
 
 1. Student sends a message; the client posts the recent thread to `POST /api/chat`.
-2. The API runs a **comprehension** pass (structured JSON) on the thread.
-3. If `DATABASE_URL` is configured, the API **embeds** retrieval text, runs **pgvector** similarity search (default top **5** chunks), and injects excerpts into the system context.
+2. The API runs a **comprehension** structured JSON pass on the thread.
+3. The API **embeds** retrieval text, runs **pgvector** similarity search, and injects excerpts into the system context.
 4. The API calls the chat model once and returns a **JSON** object: assistant prose (`answer`), **`move`**, optional `rationale`, and **source** metadata for retrieved chunks.
-5. Choreography (explain → check → probe / prompt) is driven by `move` and the metaprompt, not by a second HTTP round-trip per token.
-6. **Resource chips** in the UI are shortcuts (docs home / practice link); they are not yet driven by retrieval or by `move` (see roadmap).
+5. **Resource chips** in the UI are shortcuts to the Marcy docs (Read) or an in browser IDE (Practice) to encourage fellows to absorb the information using different modalities.
 
 ---
 
@@ -39,7 +36,7 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 | **Frontend**  | React (Vite)                 |
 | **Backend**   | Express on Node              |
 | **Vectors**   | Supabase Postgres + pgvector |
-| **Transport** | HTTP JSON (`POST /api/chat`); token streaming (e.g. SSE) not implemented yet |
+| **Transport** | HTTP JSON (`POST /api/chat`) |
 
 
 ### Embeddings & LLM
@@ -48,8 +45,8 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 | Role               | Provider | Model                    |
 | ------------------ | -------- | ------------------------ |
 | **Embeddings**     | OpenAI   | `text-embedding-3-small` |
-| **Generation**     | OpenAI   | `gpt-4o-mini`            |
-| **Comprehension pass** | OpenAI   | `gpt-4o-mini` (JSON summary + `studentComprehension`) |
+| **Generation**     | OpenAI   | `gpt-4o`                 |
+| **Comprehension**  | OpenAI   | `gpt-4o-mini`            |
 
 
 **Environment variables:** `OPENAI_API_KEY`, `DATABASE_URL` (Supabase)
@@ -75,11 +72,11 @@ After each explanation, the bot asks the student to rephrase the concept in thei
 │ OpenAI — comprehension JSON, embeddings (RAG),        │
 │ chat completion JSON (`answer` + `move`)             │
 └──────────────────────────┬──────────────────────────┘
-                           │ similarity search when RAG on
+                           │ similarity search
                            ▼
 ┌─────────────────────────────────────────────────────┐
 │ Postgres + pgvector — `curriculum` chunks            │
-│ (conversation persistence — roadmap)                 │
+│ (conversation persistence — wip)                 │
 └─────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────┐
@@ -146,12 +143,12 @@ The client appends `answer` as the next assistant bubble. `sources` lists retrie
 
 ### Layer 2 — API (Node / Express)
 
-Orchestrates each turn: normalize `messages`, run **comprehension**, optionally **retrieve** + format chunks, assemble **system** prompt, call chat completion with **`response_format: json_object`**, return one JSON payload. Does not persist the transcript to Postgres yet (see roadmap).
+Orchestrates each turn: normalize `messages`, run **comprehension**, **retrieve** + format chunks, assemble **system** prompt, call chat completion with **`response_format: json_object`**, return one JSON payload. Does not persist the transcript to Postgres yet (see roadmap).
 
 **Contract: API → Embed**
 
 ```
-Input:  message string (retrieval text from latest user message + summary)
+Input:  message string (retrieval text from summary + last user message)
 Output: float[1536]  (text-embedding-3-small)
 ```
 
@@ -191,12 +188,10 @@ Future: per interaction persistence (student, conversation, message, signals)
 Per student message (typical path):
 
 1. **Comprehension** — thread → JSON summary + `studentComprehension` (`gpt-4o-mini`, structured output)
-2. **Embed** (if RAG on) — retrieval text → vector (`text-embedding-3-small`, same model as ingestion)
-3. **Generate** — system prompt + excerpts + thread → JSON `answer` + `move` + `rationale` (`gpt-4o-mini`, structured output)
+2. **Embed** — retrieval text → vector (`text-embedding-3-small`, same model as ingestion)
+3. **Generate** — system prompt + excerpts + JSON summary → JSON `answer` + `move` + `rationale` (`gpt-4o`, structured output)
 
 The LLM is stateless. Conversation history is passed explicitly on every call; the client also passes `previousAssistantMove` for continuity.
-
-**Note:** Token streaming (SSE or similar) is **not** the same problem as auth or transport security. Today the server waits for the full model JSON; streaming would be a UX/perf change only.
 
 ---
 
@@ -260,7 +255,7 @@ The most important piece of the application. It tells the model to:
 
 ## Assistant `move` and comprehension (what ships)
 
-The API does not yet expose **extend / build / backup** as explicit enums. Those labels remain the **research-facing** vocabulary for how we want to *describe* adaptation and logging (see **v2.1**). Operationally, the model returns **`move`** and the comprehension pass returns **`studentComprehension`**:
+The API does not yet expose **lost / partial / solid** as explicit enums. Those labels remain the **research-facing** vocabulary for how we want to *describe* adaptation and logging (see **v2.1**). Operationally, the model returns **`move`** and the comprehension pass returns **`studentComprehension`**:
 
 | `studentComprehension` | Meaning (rough) |
 | ---------------------- | ---------------- |
@@ -276,9 +271,7 @@ The API does not yet expose **extend / build / backup** as explicit enums. Those
 | **probe**   | Follow up when the reply is thin or unclear |
 | **prompt**  | Nudge toward application (e.g. small task, next step) |
 
-The comprehension pass and the final JSON reply both read what the student actually wrote, not a chip they clicked.
-
-**Design target (Kestin et al., 2025):** curriculum-specific tutoring that tests **transfer**, not only completion. The **extend / build / backup** triangle is how we want to *name* those adaptations for instructors and analytics once classification and UI catch up (**v2.1**, **v2** logging).
+**Design target (Kestin et al., 2025):** curriculum-specific tutoring that tests **transfer**, not only completion.
 
 ---
 
@@ -369,21 +362,20 @@ Visit `http://localhost:5173`
 
 **v2 — Logging and aggregation**
 
-- Persist `studentComprehension`, `move`, which chunks fired, and (once **v2.1** lands) the **extend / build / backup** label on every interaction
-- Schema today is still evolving; this version makes cohort-level queries real
-- Over time, patterns emerge from usage: which questions consistently need prerequisite-style routing (**backup** in the research vocabulary), which chunks fire together, where the curriculum has gaps
+- Persist `studentComprehension`, `move`, which chunks fired, and (once **v2.1** lands) the **lost / partial / solid / off-topid** label on every interaction
+- Over time, patterns emerge from usage: which questions consistently need prerequisite-style routing (**lost** in the research vocabulary), which chunks fire together, where the curriculum has gaps
 - This is the foundation everything else in the roadmap depends on. The instructor dashboard is an empty table without it
 
 **Refactor — Default explain → transfer (product shape)**
 
-- **Choreography:** Every tutoring turn aims for **two beats**: a **small explain** (depth scales with `studentComprehension` and frustration), then **transfer**—either a **transfer-adjacent check** in chat or a **`prompt`** to code. Not encyclopedia prose; **one bite**, then **apply**.
+- **Choreography:** Every tutoring turn aims for **two beats**: a **small explain** (depth scales with `studentComprehension`), then **transfer**—either a **transfer-adjacent check** in chat or a **`prompt`** to code. Not encyclopedia prose; **one bite**, then **apply**.
 - **Stretch:** How wide the transfer step is (micro what-if vs open editor) also scales with state; **prompt to code sooner than textbook habits** when the student can carry the load.
 - **Today:** Encoded in `server/metaprompt.md` and the `move` enum returned from `/api/chat`. **Next:** Treat the two beats as **first-class** in logging (v2) and optionally in response shape so tuning doesn’t rely on prompt prose alone.
 
 **v2.1 — Metacognition: labels, branches, and resource hints**
 
-- **Bubble labels** in the UI (e.g. Big idea, Your turn, Let’s dig deeper, What’s next?) so students see *what kind of turn* they’re in, not only prose
-- **Classifier output** aligned with the research framing: explicit **`extend` | `build` | `backup`** (or equivalent) derived from `studentComprehension`, check replies, and `move`, logged alongside the raw signals for instructors
+- **Bubble labels** in the UI (e.g. Big idea, Your turn, Let’s dig deeper, What’s next?) so students see *what kind of turn* they’re in
+- **Classifier output** aligned with the research framing: explicit **`lost` | `partial` | `solid`** check replies, and `move`, logged alongside the raw signals for instructors
 - **Resource hints** optional in the API: which chips to emphasize or defer based on that branch (today chips are static shortcuts)
 
 **v3 — Generated coding challenges**
@@ -395,7 +387,7 @@ Visit `http://localhost:5173`
 **v4 — Prerequisite mapping**
 
 - Encode the dependency graph of the Marcy curriculum (one-time authoring work)
-- When a student routes to **backup**, surface the prerequisite concept with a direct link to that section of the Marcy Docs
+- When a student routes to **lost**, surface the prerequisite concept with a direct link to that section of the Marcy Docs
 - Example: struggling with `useEffect`, surface `useState` first
 
 **v5 — Video**
@@ -422,12 +414,12 @@ Visit `http://localhost:5173`
 **v8 — Instructor dashboard**
 
 - Aggregate classification signals across the cohort
-- Surface which concepts are producing the most **backup** branches as a real-time formative signal
+- Surface which concepts are producing the most **lost** branches as a real-time formative signal
 - Only useful once v2 logging is in place and there are enough students to see patterns
 
 **v9 — Ping an instructor**
 
-- When the conversation reveals sustained struggle across multiple **backup** branches, present a path that lets the student flag a human instructor directly
+- When the conversation reveals sustained struggle across multiple **lost** branches, present a path that lets the student flag a human instructor directly
 - Passive signal first visible to instructor dashboard in v8; active ping as opt-in
 
 ---

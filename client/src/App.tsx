@@ -143,9 +143,9 @@ function App() {
         {messages.length === 0 ? (
           <div className="app-onboarding">
             <p className="app-placeholder">
-              <strong>KestinBot</strong> is a study assistant for 
-              <strong>Marcy Lab School</strong> software engineering. 
-              Ask in plain English and get a quick answer grounded in
+              <strong>KestinBot</strong> is a study assistant for {''}
+              <strong>Marcy Lab School</strong> software engineering fellows. 
+              Ask questions in plain English and get a quick answer grounded in
               Marcy’s curriculum. <br/><br/>
               When the explanation in class just didn’t click, 
               or you didn’t want to draw attention by raising your hand.
